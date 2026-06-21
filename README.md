@@ -69,6 +69,7 @@ python3 agent_cli_audit.py --with-release-notes
 
 ```bash
 python3 agent_cli_upgrade.py
+python3 agent_cli_upgrade.py --offline
 python3 agent_cli_upgrade.py --channel recommended
 python3 agent_cli_upgrade.py --channel supported
 python3 agent_cli_upgrade.py --tool codex --tool gemini
@@ -86,6 +87,8 @@ The GUI is intentionally a thin shell over the existing CLI tools:
 
 - `Overview` explains the upgrade model and shows static example data
 - `Console` runs local audit and dry-run upgrade-plan commands
+- `Console` includes status filtering, outdated-only filtering, and an upgrade-plan result panel
+- long-running audit and plan calls run in the background and surface timeout guidance
 - the first version does not execute real upgrades
 
 ## Output Model
@@ -114,6 +117,7 @@ The audit output distinguishes:
 - Most entries are `agent-cli`. A small number of adjacent tools can be retained as `tooling-runtime` when they matter to the same upgrade/governance workflow.
 - The audit output separates `update_command` from `migration_command`. Use the first for in-channel upgrades, and the second when the current install method should be replaced with the vendor-recommended one.
 - `agent_cli_upgrade.py` only upgrades entries that are both outdated and on a recognized supported or recommended channel.
+- `agent_cli_upgrade.py --offline` reuses offline audit mode for faster but less complete upgrade planning.
 - `agent_cli_upgrade.py --channel recommended` narrows the plan to vendor-recommended install channels only.
 - `agent_cli_upgrade.py --channel supported` is the default and includes both recommended and supported channels.
 - `--recommended-only` is kept as a compatibility alias for `--channel recommended`.

@@ -29,6 +29,9 @@ The format is intentionally simple and human-maintained.
 - Added `--only-class`, `--only-outdated`, and `--only-nonstandard` audit filters
 - Added `--channel recommended|supported|all` upgrade filtering
 - Added `--json` output mode to `agent_cli_upgrade.py`
+- Added `--offline` mode to `agent_cli_upgrade.py`
+- Moved GUI audit and plan execution off the UI thread to avoid websocket disconnects
+- Added GUI timeout guidance, status filtering, outdated-only filtering, and an upgrade-plan summary panel
 
 ### Project
 

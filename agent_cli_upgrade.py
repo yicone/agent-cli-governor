@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 
 ROOT = Path(__file__).resolve().parent
@@ -14,9 +15,12 @@ AUDIT = ROOT / "agent_cli_audit.py"
 SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:[-+](.*))?$")
 
 
-def load_audit() -> list[dict]:
+def load_audit(*, offline: bool) -> list[dict[str, Any]]:
+    args = [str(AUDIT), "--json"]
+    if offline:
+        args.append("--offline")
     completed = subprocess.run(
-        [str(AUDIT), "--json"],
+        args,
         text=True,
         capture_output=True,
         check=True,
@@ -78,6 +82,7 @@ def run_shell(command: str) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Safe wrapper for upgrading audited agent CLIs.")
     parser.add_argument("--json", action="store_true", help="Output the upgrade plan as JSON.")
+    parser.add_argument("--offline", action="store_true", help="Use offline audit mode for faster but less complete planning.")
     parser.add_argument("--tool", action="append", dest="tools", help="Tool id to upgrade. Repeatable.")
     parser.add_argument("--apply", action="store_true", help="Execute upgrades. Without this flag, only print the plan.")
     parser.add_argument("--yes", action="store_true", help="Skip the interactive confirmation when used with --apply.")
@@ -87,18 +92,18 @@ def main() -> int:
 
     selected = set(args.tools or [])
     channel = "recommended" if args.recommended_only else args.channel
-    items = load_audit()
+    items = load_audit(offline=args.offline)
     plan = build_plan(items, selected if selected else None, channel)
 
     if not plan:
         if args.json:
-            print(json.dumps({"channel": channel, "plan": []}, indent=2))
+            print(json.dumps({"channel": channel, "offline": args.offline, "plan": []}, indent=2))
             return 0
         print("No upgrade candidates matched the current filters.")
         return 0
 
     if args.json:
-        print(json.dumps({"channel": channel, "plan": plan}, indent=2))
+        print(json.dumps({"channel": channel, "offline": args.offline, "plan": plan}, indent=2))
         return 0
 
     print("Upgrade plan:")

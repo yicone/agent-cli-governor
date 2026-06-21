@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import json
 import subprocess
+from asyncio import wait_for
 from pathlib import Path
 from typing import Any
 
-from nicegui import ui
+from nicegui import run, ui
 
 
 ROOT = Path(__file__).resolve().parent
@@ -52,6 +53,10 @@ class AppState:
         self.current_channel = "recommended"
         self.release_notes = True
         self.offline = False
+        self.is_running = False
+        self.status_filter = "all"
+        self.only_outdated = False
+        self.last_error = ""
 
     def log(self, message: str) -> None:
         self.activity.append(message)
@@ -74,13 +79,37 @@ def build_audit_command() -> list[str]:
 
 def build_plan_command() -> list[str]:
     args = ["python3", str(UPGRADE), "--json", "--channel", state.current_channel]
+    if state.offline:
+        args.append("--offline")
     state.plan_command = " ".join(args)
     return args
 
 
+def filter_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    filtered = rows
+    if state.status_filter != "all":
+        filtered = [row for row in filtered if row.get("channel_status") == state.status_filter]
+    if state.only_outdated:
+        filtered = [
+            row for row in filtered
+            if row.get("current_version") and row.get("latest_version") and row.get("current_version") != row.get("latest_version")
+        ]
+    return filtered
+
+
+def badge_classes(status: str) -> str:
+    if status == "recommended":
+        return "bg-green-100 text-green-800 px-2 py-1 rounded text-xs"
+    if status == "supported":
+        return "bg-amber-100 text-amber-800 px-2 py-1 rounded text-xs"
+    if status == "nonstandard":
+        return "bg-red-100 text-red-800 px-2 py-1 rounded text-xs"
+    return "bg-gray-100 text-gray-700 px-2 py-1 rounded text-xs"
+
+
 def refresh_summary(summary_row: ui.row, rows: list[dict[str, Any]]) -> None:
     summary_row.clear()
-    summary = summarize_rows(rows)
+    summary = summarize_rows(filter_rows(rows))
     with summary_row:
         for label, value in [
             ("Outdated", summary["outdated"]),
@@ -106,7 +135,7 @@ def render_details(container: ui.column, row: dict[str, Any] | None) -> None:
         ui.label(f"current: {row.get('current_version', 'unknown')}")
         ui.label(f"latest: {row.get('latest_version', 'unknown')}")
         ui.label(f"channel: {row.get('normalized_channel', 'unknown')}")
-        ui.label(f"status: {row.get('channel_status', 'unknown')}")
+        ui.html(f"<span class='{badge_classes(row.get('channel_status', 'unknown'))}'>{row.get('channel_status', 'unknown')}</span>")
         ui.label(f"risk: {risk_of(row)}")
         if row.get("notes"):
             ui.markdown(f"**Notes**: {row['notes']}")
@@ -126,15 +155,7 @@ def render_details(container: ui.column, row: dict[str, Any] | None) -> None:
 
 def render_table(container: ui.column, rows: list[dict[str, Any]], details: ui.column) -> None:
     container.clear()
-    columns = [
-        {"name": "id", "label": "Tool", "field": "id", "sortable": True},
-        {"name": "tooling_class", "label": "Class", "field": "tooling_class", "sortable": True},
-        {"name": "current_version", "label": "Current", "field": "current_version", "sortable": True},
-        {"name": "latest_version", "label": "Latest", "field": "latest_version", "sortable": True},
-        {"name": "normalized_channel", "label": "Channel", "field": "normalized_channel", "sortable": True},
-        {"name": "channel_status", "label": "Status", "field": "channel_status", "sortable": True},
-        {"name": "risk", "label": "Risk", "field": "risk", "sortable": True},
-    ]
+    rows = filter_rows(rows)
     table_rows = []
     for row in rows:
         table_rows.append({**row, "risk": risk_of(row)})
@@ -166,32 +187,87 @@ def render_table(container: ui.column, rows: list[dict[str, Any]], details: ui.c
         table.on("selectionChanged", handle_select)
 
 
-def run_audit(summary_row: ui.row, table_col: ui.column, details: ui.column, activity_col: ui.log) -> None:
+async def run_audit(
+    summary_row: ui.row,
+    table_col: ui.column,
+    details: ui.column,
+    activity_col: ui.log,
+    status_label: ui.label,
+    spinner: ui.spinner,
+) -> None:
+    if state.is_running:
+        ui.notify("A task is already running", type="warning")
+        return
+    state.is_running = True
     try:
         state.log("Running audit...")
         activity_col.push("Running audit...")
-        payload = run_json_command(build_audit_command())
+        status_label.set_text("Running audit...")
+        spinner.visible = True
+        payload = await wait_for(run.io_bound(run_json_command, build_audit_command()), timeout=45)
         state.audit_rows = payload["installed"]
         refresh_summary(summary_row, state.audit_rows)
         render_table(table_col, state.audit_rows, details)
         render_details(details, None)
         activity_col.push("Audit completed.")
+        status_label.set_text("Audit completed.")
         ui.notify("Audit completed", type="positive")
+    except TimeoutError:
+        activity_col.push("Audit timed out. Try enabling Offline mode for a quicker local-only check.")
+        status_label.set_text("Audit timed out.")
+        ui.notify("Audit timed out. Try Offline mode.", type="warning")
     except Exception as exc:
+        state.last_error = str(exc)
         activity_col.push(f"Audit failed: {exc}")
+        status_label.set_text("Audit failed.")
         ui.notify(f"Audit failed: {exc}", type="negative")
+    finally:
+        spinner.visible = False
+        state.is_running = False
 
 
-def run_plan(activity_col: ui.log) -> None:
+def render_plan_summary(container: ui.column, plan_rows: list[dict[str, Any]]) -> None:
+    container.clear()
+    with container:
+        if not plan_rows:
+            ui.label("No upgrade candidates for the current filters.").classes("text-gray-600")
+            return
+        for row in plan_rows:
+            with ui.card().classes("w-full p-3"):
+                with ui.row().classes("items-center justify-between w-full"):
+                    ui.label(f"{row['id']}: {row.get('current_version')} -> {row.get('latest_version')}").classes("font-semibold")
+                    ui.html(f"<span class='{badge_classes(row.get('channel_status', 'unknown'))}'>{row.get('channel_status', 'unknown')}</span>")
+                ui.label(f"risk: {risk_of(row)}").classes("text-sm text-gray-700")
+                ui.code(row.get("update_command", ""))
+
+
+async def run_plan(activity_col: ui.log, status_label: ui.label, spinner: ui.spinner, plan_container: ui.column) -> None:
+    if state.is_running:
+        ui.notify("A task is already running", type="warning")
+        return
+    state.is_running = True
     try:
         activity_col.push("Running upgrade plan...")
-        payload = run_json_command(build_plan_command())
+        status_label.set_text("Running upgrade plan...")
+        spinner.visible = True
+        payload = await wait_for(run.io_bound(run_json_command, build_plan_command()), timeout=45)
         state.plan_rows = payload["plan"]
+        render_plan_summary(plan_container, state.plan_rows)
         activity_col.push(f"Upgrade plan completed with {len(state.plan_rows)} candidate(s).")
+        status_label.set_text(f"Upgrade plan completed with {len(state.plan_rows)} candidate(s).")
         ui.notify(f"Upgrade plan completed: {len(state.plan_rows)} candidate(s)", type="positive")
+    except TimeoutError:
+        activity_col.push("Upgrade plan timed out. Try enabling Offline mode first.")
+        status_label.set_text("Upgrade plan timed out.")
+        ui.notify("Upgrade plan timed out. Try Offline mode.", type="warning")
     except Exception as exc:
+        state.last_error = str(exc)
         activity_col.push(f"Upgrade plan failed: {exc}")
+        status_label.set_text("Upgrade plan failed.")
         ui.notify(f"Upgrade plan failed: {exc}", type="negative")
+    finally:
+        spinner.visible = False
+        state.is_running = False
 
 
 ui.page_title("agent-cli-governor")
@@ -250,7 +326,11 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
                     summary_row = ui.row().classes("w-full gap-3 mt-4")
                     table_col = ui.column().classes("w-full")
                     details_col = ui.column().classes("w-full")
+                    plan_col = ui.column().classes("w-full")
                     activity_log = ui.log().classes("w-full h-32")
+                    status_label = ui.label("Idle").classes("text-sm text-gray-600 mt-2")
+                    spinner = ui.spinner(size="md")
+                    spinner.visible = False
 
                     def sync_state() -> None:
                         state.current_class = class_select.value
@@ -258,11 +338,36 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
                         state.release_notes = bool(release_notes.value)
                         state.offline = bool(offline.value)
 
+                    def refresh_current_table() -> None:
+                        if state.audit_rows:
+                            refresh_summary(summary_row, state.audit_rows)
+                            render_table(table_col, state.audit_rows, details_col)
+
                     with ui.row().classes("gap-2"):
-                        ui.button("Run Audit", on_click=lambda: (sync_state(), run_audit(summary_row, table_col, details_col, activity_log)))
-                        ui.button("Run Upgrade Plan", on_click=lambda: (sync_state(), run_plan(activity_log)))
-                        ui.button("Refresh", on_click=lambda: (sync_state(), run_audit(summary_row, table_col, details_col, activity_log)))
+                        async def handle_audit() -> None:
+                            sync_state()
+                            await run_audit(summary_row, table_col, details_col, activity_log, status_label, spinner)
+
+                        async def handle_plan() -> None:
+                            sync_state()
+                            await run_plan(activity_log, status_label, spinner, plan_col)
+
+                        ui.button("Run Audit", on_click=handle_audit)
+                        ui.button("Run Upgrade Plan", on_click=handle_plan)
+                        ui.button("Refresh", on_click=handle_audit)
                         ui.button("Copy Summary", on_click=lambda: ui.run_javascript(f"navigator.clipboard.writeText({json.dumps({'audit': state.audit_command, 'plan': state.plan_command})!r})"))
+
+                    with ui.row().classes("gap-2 mt-2 items-center"):
+                        status_select = ui.select(["all", "recommended", "supported", "nonstandard"], value="all", label="Status Filter")
+                        outdated_only = ui.switch("Only outdated", value=False)
+
+                        def sync_filters() -> None:
+                            state.status_filter = status_select.value
+                            state.only_outdated = bool(outdated_only.value)
+                            refresh_current_table()
+
+                        status_select.on("update:model-value", lambda _: sync_filters())
+                        outdated_only.on("update:model-value", lambda _: sync_filters())
 
             with ui.grid(columns=2).classes("w-full gap-4"):
                 with ui.card().classes("p-4"):
@@ -286,6 +391,10 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
                 with ui.card().classes("p-4"):
                     ui.label("Details").classes("text-lg font-semibold")
                     render_details(details_col, None)
+
+                with ui.card().classes("p-4"):
+                    ui.label("Upgrade Plan").classes("text-lg font-semibold")
+                    render_plan_summary(plan_col, [])
 
 
 ui.run(title="agent-cli-governor", reload=False)
