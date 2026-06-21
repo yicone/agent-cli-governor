@@ -103,6 +103,46 @@ The audit output distinguishes:
 - `agent_cli_upgrade.py --channel supported` is the default and includes both recommended and supported channels.
 - `--recommended-only` is kept as a compatibility alias for `--channel recommended`.
 
+## Why Not `topgrade`
+
+`topgrade` is useful as a bulk execution engine, but this repository solves a different problem.
+
+`agent-cli-governor` is opinionated about:
+
+- whether a tool is installed through the vendor-recommended channel
+- whether the current channel is merely supported or already drifted
+- how to compare vendor-specific latest-version sources
+- how to surface migration advice when the install method is no longer preferred
+
+Those policy checks are the core value here. A generic upgrader can execute package-manager updates, but it usually does not answer:
+
+- should this tool be upgraded from the current channel at all
+- is the current install method still the one the vendor wants
+- does this tool need an in-channel upgrade or a migration
+
+So the project treats `topgrade` as optional execution infrastructure, not as the decision-making layer.
+
+## Why `recommended` vs `supported`
+
+The distinction is intentional and operationally useful:
+
+- `recommended`
+  The vendor's current preferred installation path. This is the safest default for routine upgrades.
+- `supported`
+  A channel the vendor still supports, but does not currently present as the preferred path.
+
+Without this distinction, local CLI governance becomes too coarse:
+
+- some tools would be upgraded through channels the vendor is gradually de-emphasizing
+- migration opportunities would be hidden inside normal upgrade advice
+- automated checks could not separate "safe default upgrades" from "allowed but less preferred upgrades"
+
+In practice:
+
+- `--channel recommended` is the conservative weekly-upgrade path
+- `--channel supported` is the broader review path
+- `nonstandard` is where migration or manual review is usually needed
+
 ## Repository Development
 
 Basic health checks:
