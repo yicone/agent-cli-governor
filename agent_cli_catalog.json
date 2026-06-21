@@ -1,0 +1,256 @@
+{
+  "tools": [
+    {
+      "id": "codex",
+      "name": "OpenAI Codex CLI",
+      "tooling_class": "agent-cli",
+      "commands": ["codex"],
+      "version_args": [["--version"], ["version"]],
+      "npm_package": "@openai/codex",
+      "official_install_url": "https://developers.openai.com/codex/cli",
+      "official_release_notes_url": "https://github.com/openai/codex/releases",
+      "recommended_channels": ["script"],
+      "supported_channels": ["script", "npm", "brew"],
+      "channel_notes": {
+        "script": "Official docs currently lead with the standalone installer.",
+        "npm": "Supported, but not the primary path shown in current docs.",
+        "brew": "Supported, but not the primary path shown in current docs."
+      }
+    },
+    {
+      "id": "claude",
+      "name": "Anthropic Claude Code",
+      "tooling_class": "agent-cli",
+      "commands": ["claude"],
+      "version_args": [["--version"], ["version"]],
+      "brew_package": "claude-code",
+      "official_install_url": "https://github.com/anthropics/claude-code",
+      "official_release_notes_url": "https://github.com/anthropics/claude-code/releases",
+      "recommended_channels": ["script"],
+      "supported_channels": ["script", "brew-cask"],
+      "channel_notes": {
+        "script": "Anthropic currently recommends the install script on macOS and Linux.",
+        "brew-cask": "Supported, but not the recommended path."
+      }
+    },
+    {
+      "id": "gemini",
+      "name": "Google Gemini CLI",
+      "tooling_class": "agent-cli",
+      "commands": ["gemini"],
+      "version_args": [["--version"], ["version"]],
+      "npm_package": "@google/gemini-cli",
+      "brew_package": "gemini-cli",
+      "official_install_url": "https://geminicli.com/docs/get-started/installation/",
+      "official_release_notes_url": "https://github.com/google-gemini/gemini-cli/releases",
+      "recommended_channels": ["npm", "brew"],
+      "supported_channels": ["npm", "brew"],
+      "channel_notes": {
+        "npm": "Officially supported.",
+        "brew": "Officially supported."
+      }
+    },
+    {
+      "id": "opencode",
+      "name": "OpenCode",
+      "tooling_class": "agent-cli",
+      "commands": ["opencode"],
+      "version_args": [["--version"], ["version"]],
+      "npm_package": "opencode-ai",
+      "brew_package": "opencode",
+      "official_install_url": "https://opencode.ai/docs/",
+      "official_release_notes_url": "https://github.com/anomalyco/opencode/releases",
+      "recommended_channels": ["script", "brew-tap"],
+      "supported_channels": ["script", "brew-tap", "npm", "brew-core"],
+      "channel_notes": {
+        "script": "OpenCode docs say the install script is the easiest path.",
+        "brew-tap": "OpenCode docs recommend anomalyco/tap for the most up to date releases.",
+        "brew-core": "Supported, but docs warn Homebrew core may lag upstream.",
+        "npm": "Supported, but not the preferred path in the docs."
+      }
+    },
+    {
+      "id": "multica",
+      "name": "Multica CLI",
+      "tooling_class": "agent-cli",
+      "commands": ["multica"],
+      "version_args": [["--version"], ["version"]],
+      "brew_package": "multica",
+      "official_install_url": "https://multica.ai/docs",
+      "official_release_notes_url": "https://github.com/multica-ai/multica/releases",
+      "recommended_channels": ["brew-tap"],
+      "supported_channels": ["brew-tap", "source"],
+      "channel_notes": {
+        "brew-tap": "Official docs show Homebrew tap installation.",
+        "source": "Supported for local builds."
+      }
+    },
+    {
+      "id": "copilot",
+      "name": "GitHub Copilot CLI",
+      "tooling_class": "agent-cli",
+      "commands": ["copilot"],
+      "version_args": [["--version"], ["version"]],
+      "npm_package": "@github/copilot",
+      "brew_package": "copilot-cli",
+      "official_install_url": "https://docs.github.com/copilot/how-tos/set-up/install-copilot-cli",
+      "official_release_notes_url": "https://github.com/github/copilot-cli/releases",
+      "recommended_channels": ["script", "brew", "npm"],
+      "supported_channels": ["script", "brew", "npm"],
+      "channel_notes": {
+        "script": "Officially supported.",
+        "brew": "Officially supported.",
+        "npm": "Officially supported."
+      }
+    },
+    {
+      "id": "amp",
+      "name": "Amp CLI",
+      "tooling_class": "agent-cli",
+      "commands": ["amp"],
+      "version_args": [["--version"], ["version"]],
+      "npm_package": "@ampcode/cli",
+      "brew_package": "ampcode",
+      "latest_source": {
+        "type": "text",
+        "url": "https://static.ampcode.com/cli/cli-version.txt"
+      },
+      "official_install_url": "https://ampcode.com/manual",
+      "official_release_notes_url": "https://ampcode.com/manual",
+      "recommended_channels": ["script"],
+      "supported_channels": ["script", "brew"],
+      "channel_notes": {
+        "script": "Amp docs lead with the install script and self-update flow.",
+        "brew": "Supported by the official tap.",
+        "npm": "Docs explicitly say npm is not recommended."
+      }
+    },
+    {
+      "id": "droid",
+      "name": "Factory Droid CLI",
+      "tooling_class": "agent-cli",
+      "commands": ["droid"],
+      "version_args": [["--version"], ["version"]],
+      "npm_package": "droid",
+      "latest_source": {
+        "type": "regex",
+        "url": "https://app.factory.ai/cli",
+        "pattern": "VER=\\\"([^\\\"]+)\\\""
+      },
+      "official_install_url": "https://docs.factory.ai/cli/getting-started/quickstart",
+      "official_release_notes_url": "https://docs.factory.ai/changelog/release-notes",
+      "custom_release_notes": {
+        "type": "html-first-version",
+        "url": "https://docs.factory.ai/changelog/release-notes",
+        "version_prefix": "v"
+      },
+      "recommended_channels": ["script"],
+      "supported_channels": ["script", "npm"],
+      "channel_notes": {
+        "script": "Factory docs lead with the install script.",
+        "npm": "Supported, but not the primary path in current docs."
+      }
+    },
+    {
+      "id": "kilocode",
+      "name": "Kilo Code CLI",
+      "tooling_class": "agent-cli",
+      "commands": ["kilocode", "kilo"],
+      "version_args": [["--version"], ["version"]],
+      "npm_package": "@kilocode/cli",
+      "official_install_url": "https://kilo.ai/docs/code-with-ai/platforms/cli",
+      "official_release_notes_url": "https://github.com/Kilo-Org/kilocode/releases",
+      "recommended_channels": ["npm", "github-release"],
+      "supported_channels": ["npm", "github-release"],
+      "channel_notes": {
+        "npm": "Officially supported.",
+        "github-release": "Officially supported."
+      }
+    },
+    {
+      "id": "kiro-cli",
+      "name": "Kiro CLI",
+      "tooling_class": "agent-cli",
+      "commands": ["kiro-cli"],
+      "version_args": [["--version"], ["version"]],
+      "brew_package": "kiro-cli",
+      "latest_source": {
+        "type": "json",
+        "url": "https://prod.download.cli.kiro.dev/stable/latest/manifest.json",
+        "field": "version"
+      },
+      "official_install_url": "https://kiro.dev/docs/cli/installation/",
+      "official_release_notes_url": "https://kiro.dev/changelog/cli/",
+      "custom_release_notes": {
+        "type": "html-version-match",
+        "url": "https://kiro.dev/changelog/cli/",
+        "fallback_latest": true
+      },
+      "recommended_channels": ["script"],
+      "supported_channels": ["script"],
+      "channel_notes": {
+        "script": "Kiro docs lead with the install script and explicitly say Homebrew is not supported.",
+        "app-bundle": "An app-bundled binary is nonstandard relative to the CLI install docs.",
+        "brew-cask": "Installed via Homebrew cask, but Kiro docs explicitly say Homebrew is not supported."
+      }
+    },
+    {
+      "id": "devin",
+      "name": "Devin CLI",
+      "tooling_class": "agent-cli",
+      "commands": ["devin"],
+      "version_args": [["--version"], ["version"]],
+      "brew_package": "devin-cli",
+      "latest_source": {
+        "type": "json",
+        "url": "https://static.devin.ai/cli/current/manifest.json",
+        "field": "version"
+      },
+      "official_install_url": "https://docs.devin.ai/cli",
+      "official_release_notes_url": "https://docs.devin.ai/cli/changelog/stable",
+      "custom_release_notes": {
+        "type": "html-version-match",
+        "url": "https://docs.devin.ai/cli/changelog/stable",
+        "fallback_latest": true
+      },
+      "recommended_channels": ["script", "desktop-install"],
+      "supported_channels": ["script", "desktop-install", "brew-cask"],
+      "channel_notes": {
+        "script": "Official docs support the install script flow.",
+        "desktop-install": "Official docs support Desktop-managed CLI installation.",
+        "brew-cask": "Supported, but not the primary path shown in current docs."
+      }
+    },
+    {
+      "id": "cline",
+      "name": "Cline CLI",
+      "tooling_class": "agent-cli",
+      "commands": ["cline"],
+      "version_args": [["--version"], ["version"]],
+      "npm_package": "cline",
+      "official_install_url": "https://cline.bot/cli",
+      "official_release_notes_url": "https://github.com/cline/cline/releases",
+      "recommended_channels": ["npm"],
+      "supported_channels": ["npm"],
+      "channel_notes": {
+        "npm": "Official docs lead with global npm installation."
+      }
+    },
+    {
+      "id": "uv",
+      "name": "uv",
+      "tooling_class": "tooling-runtime",
+      "commands": ["uv"],
+      "version_args": [["--version"], ["version"]],
+      "brew_package": "uv",
+      "official_install_url": "https://docs.astral.sh/uv/getting-started/installation/",
+      "official_release_notes_url": "https://github.com/astral-sh/uv/releases",
+      "recommended_channels": ["script"],
+      "supported_channels": ["script", "brew"],
+      "channel_notes": {
+        "script": "Astral docs currently lead with the standalone installer.",
+        "brew": "Officially supported."
+      }
+    }
+  ]
+}
