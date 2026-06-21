@@ -16,6 +16,8 @@ Audit and govern locally installed agent CLIs and adjacent runtime tooling.
   Builds a conservative upgrade plan from the audit results and can optionally execute approved upgrades.
 - `agent_cli_catalog.json`
   The policy catalog that defines tracked tools, install channels, and source-specific latest-version lookups.
+- `gui.py`
+  A thin NiceGUI prototype that visualizes the existing CLI and JSON outputs without replacing the CLI-first core.
 
 ## Scope
 
@@ -45,7 +47,7 @@ The catalog can also retain a small number of adjacent `tooling-runtime` depende
   - `npm`
   - network access for latest-version and release-note checks
 
-No Python package installation is currently required.
+No Python package installation is currently required for the CLI tools.
 
 ## Usage
 
@@ -72,6 +74,19 @@ python3 agent_cli_upgrade.py --channel supported
 python3 agent_cli_upgrade.py --tool codex --tool gemini
 python3 agent_cli_upgrade.py --tool uv --apply
 ```
+
+### GUI Prototype
+
+```bash
+python3 -m pip install -r requirements-gui.txt
+python3 gui.py
+```
+
+The GUI is intentionally a thin shell over the existing CLI tools:
+
+- `Overview` explains the upgrade model and shows static example data
+- `Console` runs local audit and dry-run upgrade-plan commands
+- the first version does not execute real upgrades
 
 ## Output Model
 
@@ -148,7 +163,7 @@ In practice:
 Basic health checks:
 
 ```bash
-python3 -m py_compile agent_cli_audit.py agent_cli_upgrade.py
+python3 -m py_compile agent_cli_audit.py agent_cli_upgrade.py gui.py
 python3 agent_cli_audit.py --offline --only-class agent-cli
 python3 agent_cli_upgrade.py --channel recommended
 ```

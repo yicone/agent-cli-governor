@@ -77,6 +77,7 @@ def run_shell(command: str) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Safe wrapper for upgrading audited agent CLIs.")
+    parser.add_argument("--json", action="store_true", help="Output the upgrade plan as JSON.")
     parser.add_argument("--tool", action="append", dest="tools", help="Tool id to upgrade. Repeatable.")
     parser.add_argument("--apply", action="store_true", help="Execute upgrades. Without this flag, only print the plan.")
     parser.add_argument("--yes", action="store_true", help="Skip the interactive confirmation when used with --apply.")
@@ -90,7 +91,14 @@ def main() -> int:
     plan = build_plan(items, selected if selected else None, channel)
 
     if not plan:
+        if args.json:
+            print(json.dumps({"channel": channel, "plan": []}, indent=2))
+            return 0
         print("No upgrade candidates matched the current filters.")
+        return 0
+
+    if args.json:
+        print(json.dumps({"channel": channel, "plan": plan}, indent=2))
         return 0
 
     print("Upgrade plan:")

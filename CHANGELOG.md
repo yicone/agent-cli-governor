@@ -16,6 +16,9 @@ The format is intentionally simple and human-maintained.
 - `agent_cli_audit.py` for local install-channel, version, and release-risk auditing
 - `agent_cli_upgrade.py` for conservative upgrade planning and execution
 - `agent_cli_catalog.json` for vendor/channel/source policy data
+- `gui.py` NiceGUI prototype with `Overview` and `Console` tabs
+- `gui_sample_data.json` for stable example audit presentation
+- `requirements-gui.txt` for optional GUI dependencies
 - `tooling_class` support to separate `agent-cli` from adjacent `tooling-runtime` dependencies
 - Migration advice via `migration_target` and `migration_command`
 - Weekly automation support based on local audit and upgrade commands
@@ -25,6 +28,7 @@ The format is intentionally simple and human-maintained.
 - Tightened `kiro-cli` detection so official script installs are not misclassified as Homebrew-managed casks
 - Added `--only-class`, `--only-outdated`, and `--only-nonstandard` audit filters
 - Added `--channel recommended|supported|all` upgrade filtering
+- Added `--json` output mode to `agent_cli_upgrade.py`
 
 ### Project
 

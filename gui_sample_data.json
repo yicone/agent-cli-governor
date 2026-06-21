@@ -1,0 +1,67 @@
+{
+  "overview_rows": [
+    {
+      "id": "droid",
+      "tooling_class": "agent-cli",
+      "current_version": "0.138.0",
+      "latest_version": "0.153.1",
+      "normalized_channel": "script",
+      "channel_status": "recommended",
+      "release_summary": {
+        "risk_level": "high",
+        "highlights": [
+          "Auth and session related changes are present in recent releases.",
+          "Plugin-related capability changes may affect runtime behavior."
+        ]
+      },
+      "update_command": "curl -fsSL https://app.factory.ai/cli | sh"
+    },
+    {
+      "id": "gemini",
+      "tooling_class": "agent-cli",
+      "current_version": "0.42.0",
+      "latest_version": "0.47.0",
+      "normalized_channel": "npm",
+      "channel_status": "recommended",
+      "release_summary": {
+        "risk_level": "high",
+        "highlights": [
+          "Backend and model-selection behavior changed in recent releases.",
+          "Update-related changes merit a quick workflow smoke test."
+        ]
+      },
+      "update_command": "npm install -g @google/gemini-cli@latest"
+    },
+    {
+      "id": "codex",
+      "tooling_class": "agent-cli",
+      "current_version": "0.130.0",
+      "latest_version": "0.141.0",
+      "normalized_channel": "npm",
+      "channel_status": "supported",
+      "release_summary": {
+        "risk_level": "high",
+        "highlights": [
+          "Recent releases include auth, executor, plugin, and permission-path changes.",
+          "Supported channel, but not currently the preferred install path."
+        ]
+      },
+      "update_command": "npm install -g @openai/codex@latest"
+    },
+    {
+      "id": "kiro-cli",
+      "tooling_class": "agent-cli",
+      "current_version": "2.8.1",
+      "latest_version": "2.8.1",
+      "normalized_channel": "script",
+      "channel_status": "recommended",
+      "release_summary": {
+        "risk_level": "medium",
+        "highlights": [
+          "The newer CLI harness is opt-in and can run alongside the 2.x install."
+        ]
+      },
+      "update_command": "curl -fsSL https://cli.kiro.dev/install | bash"
+    }
+  ]
+}

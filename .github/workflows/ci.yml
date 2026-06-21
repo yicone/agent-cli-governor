@@ -18,7 +18,7 @@ jobs:
           python-version: "3.11"
 
       - name: Compile scripts
-        run: python3 -m py_compile agent_cli_audit.py agent_cli_upgrade.py
+        run: python3 -m py_compile agent_cli_audit.py agent_cli_upgrade.py gui.py
 
       - name: Audit help
         run: python3 agent_cli_audit.py --help
