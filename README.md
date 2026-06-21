@@ -91,6 +91,10 @@ The GUI is intentionally a thin shell over the existing CLI tools:
 - long-running audit and plan calls run in the background and surface timeout guidance
 - the first version does not execute real upgrades
 
+### GUI Screenshot
+
+![agent-cli-governor GUI console screenshot](./docs/assets/gui-console.png)
+
 ## Output Model
 
 The audit output distinguishes:

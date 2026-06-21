@@ -38,7 +38,12 @@ def summarize_rows(rows: list[dict[str, Any]]) -> dict[str, int]:
 
 
 def risk_of(row: dict[str, Any]) -> str:
-    return row.get("release_summary", {}).get("risk_level", "unknown")
+    return release_summary_of(row).get("risk_level", "unknown")
+
+
+def release_summary_of(row: dict[str, Any]) -> dict[str, Any]:
+    summary = row.get("release_summary")
+    return summary if isinstance(summary, dict) else {}
 
 
 class AppState:
@@ -87,6 +92,10 @@ def build_plan_command() -> list[str]:
 
 def filter_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     filtered = rows
+    if state.current_channel == "recommended":
+        filtered = [row for row in filtered if row.get("channel_status") == "recommended"]
+    elif state.current_channel == "supported":
+        filtered = [row for row in filtered if row.get("channel_status") in {"recommended", "supported"}]
     if state.status_filter != "all":
         filtered = [row for row in filtered if row.get("channel_status") == state.status_filter]
     if state.only_outdated:
@@ -123,6 +132,21 @@ def refresh_summary(summary_row: ui.row, rows: list[dict[str, Any]]) -> None:
                 ui.label(str(value)).classes("text-2xl font-semibold")
 
 
+def refresh_status_strip(container: ui.row, rows: list[dict[str, Any]]) -> None:
+    container.clear()
+    summary = summarize_rows(filter_rows(rows))
+    items = [
+        ("Recommended upgrades", max(summary["recommended"] - summary["current"], 0), "bg-green-600 text-white"),
+        ("Supported-only", summary["supported_only"], "bg-amber-500 text-white"),
+        ("Nonstandard", summary["nonstandard"], "bg-red-600 text-white"),
+    ]
+    with container:
+        for label, value, classes in items:
+            with ui.card().classes(f"flex-1 p-4 {classes}"):
+                ui.label(label).classes("text-sm opacity-90")
+                ui.label(str(value)).classes("text-3xl font-bold")
+
+
 def render_details(container: ui.column, row: dict[str, Any] | None) -> None:
     container.clear()
     if not row:
@@ -139,9 +163,10 @@ def render_details(container: ui.column, row: dict[str, Any] | None) -> None:
         ui.label(f"risk: {risk_of(row)}")
         if row.get("notes"):
             ui.markdown(f"**Notes**: {row['notes']}")
-        if row.get("release_summary", {}).get("highlights"):
+        summary = release_summary_of(row)
+        if summary.get("highlights"):
             ui.label("Highlights").classes("font-semibold mt-2")
-            for item in row["release_summary"]["highlights"][:2]:
+            for item in summary["highlights"][:2]:
                 ui.markdown(f"- {item}")
         ui.label("Commands").classes("font-semibold mt-2")
         with ui.row():
@@ -178,17 +203,24 @@ def render_table(container: ui.column, rows: list[dict[str, Any]], details: ui.c
             }
         ).classes("w-full h-[460px]")
 
-        def handle_select(_: Any) -> None:
-            selected = table.get_selected_rows()
-            if selected:
-                state.selected_row = selected[0]
+        def handle_click(event: Any) -> None:
+            args = getattr(event, "args", None) or {}
+            row = args.get("data")
+            if row is None and isinstance(args.get("rowIndex"), int):
+                idx = args["rowIndex"]
+                if 0 <= idx < len(table_rows):
+                    row = table_rows[idx]
+            if row:
+                state.selected_row = row
                 render_details(details, state.selected_row)
 
-        table.on("selectionChanged", handle_select)
+        table.on("cellClicked", handle_click)
+        table.on("rowClicked", handle_click)
 
 
 async def run_audit(
     summary_row: ui.row,
+    status_strip: ui.row,
     table_col: ui.column,
     details: ui.column,
     activity_col: ui.log,
@@ -205,12 +237,13 @@ async def run_audit(
         status_label.set_text("Running audit...")
         spinner.visible = True
         payload = await wait_for(run.io_bound(run_json_command, build_audit_command()), timeout=45)
-        state.audit_rows = payload["installed"]
+        state.audit_rows = payload.get("installed") or []
         refresh_summary(summary_row, state.audit_rows)
+        refresh_status_strip(status_strip, state.audit_rows)
         render_table(table_col, state.audit_rows, details)
         render_details(details, None)
-        activity_col.push("Audit completed.")
-        status_label.set_text("Audit completed.")
+        activity_col.push(f"Audit completed. Channel={state.current_channel}, class={state.current_class}, rows={len(filter_rows(state.audit_rows))}.")
+        status_label.set_text(f"Audit completed. {len(filter_rows(state.audit_rows))} row(s) shown.")
         ui.notify("Audit completed", type="positive")
     except TimeoutError:
         activity_col.push("Audit timed out. Try enabling Offline mode for a quicker local-only check.")
@@ -238,7 +271,13 @@ def render_plan_summary(container: ui.column, plan_rows: list[dict[str, Any]]) -
                     ui.label(f"{row['id']}: {row.get('current_version')} -> {row.get('latest_version')}").classes("font-semibold")
                     ui.html(f"<span class='{badge_classes(row.get('channel_status', 'unknown'))}'>{row.get('channel_status', 'unknown')}</span>")
                 ui.label(f"risk: {risk_of(row)}").classes("text-sm text-gray-700")
-                ui.code(row.get("update_command", ""))
+                summary = release_summary_of(row)
+                risk_terms = summary.get("risk_terms", [])
+                if risk_terms:
+                    ui.label(f"risk terms: {', '.join(risk_terms[:5])}").classes("text-xs text-gray-600")
+                for highlight in summary.get("highlights", [])[:2]:
+                    ui.markdown(f"- {highlight}")
+                ui.markdown(f"```\n{row.get('update_command', '')}\n```")
 
 
 async def run_plan(activity_col: ui.log, status_label: ui.label, spinner: ui.spinner, plan_container: ui.column) -> None:
@@ -317,16 +356,15 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
     with ui.tab_panel(console_tab):
         with ui.column().classes("w-full max-w-7xl mx-auto gap-4 p-6"):
             with ui.card().classes("w-full p-4"):
-                with ui.row().classes("items-center gap-3 w-full"):
+                with ui.row().classes("items-center gap-3 w-full flex-wrap"):
                     class_select = ui.select(["agent-cli", "tooling-runtime"], value="agent-cli", label="Class")
                     channel_select = ui.select(["recommended", "supported", "all"], value="recommended", label="Channel")
                     release_notes = ui.switch("Release Notes", value=True)
                     offline = ui.switch("Offline", value=False)
 
                     summary_row = ui.row().classes("w-full gap-3 mt-4")
+                    status_strip = ui.row().classes("w-full gap-3 mt-2")
                     table_col = ui.column().classes("w-full")
-                    details_col = ui.column().classes("w-full")
-                    plan_col = ui.column().classes("w-full")
                     activity_log = ui.log().classes("w-full h-32")
                     status_label = ui.label("Idle").classes("text-sm text-gray-600 mt-2")
                     spinner = ui.spinner(size="md")
@@ -341,25 +379,27 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
                     def refresh_current_table() -> None:
                         if state.audit_rows:
                             refresh_summary(summary_row, state.audit_rows)
-                            render_table(table_col, state.audit_rows, details_col)
+                            refresh_status_strip(status_strip, state.audit_rows)
+                            render_table(table_col, state.audit_rows, details_content)
 
-                    with ui.row().classes("gap-2"):
+                    with ui.row().classes("gap-2 flex-wrap"):
                         async def handle_audit() -> None:
                             sync_state()
-                            await run_audit(summary_row, table_col, details_col, activity_log, status_label, spinner)
+                            await run_audit(summary_row, status_strip, table_col, details_content, activity_log, status_label, spinner)
 
                         async def handle_plan() -> None:
                             sync_state()
-                            await run_plan(activity_log, status_label, spinner, plan_col)
+                            await run_plan(activity_log, status_label, spinner, plan_content)
 
                         ui.button("Run Audit", on_click=handle_audit)
                         ui.button("Run Upgrade Plan", on_click=handle_plan)
                         ui.button("Refresh", on_click=handle_audit)
                         ui.button("Copy Summary", on_click=lambda: ui.run_javascript(f"navigator.clipboard.writeText({json.dumps({'audit': state.audit_command, 'plan': state.plan_command})!r})"))
 
-                    with ui.row().classes("gap-2 mt-2 items-center"):
-                        status_select = ui.select(["all", "recommended", "supported", "nonstandard"], value="all", label="Status Filter")
-                        outdated_only = ui.switch("Only outdated", value=False)
+                    with ui.row().classes("gap-6 mt-3 items-end w-full justify-between"):
+                        with ui.row().classes("gap-4 items-end"):
+                            status_select = ui.select(["all", "recommended", "supported", "nonstandard"], value="all", label="Status Filter").classes("min-w-[220px]")
+                            outdated_only = ui.switch("Only outdated", value=False)
 
                         def sync_filters() -> None:
                             state.status_filter = status_select.value
@@ -369,20 +409,20 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
                         status_select.on("update:model-value", lambda _: sync_filters())
                         outdated_only.on("update:model-value", lambda _: sync_filters())
 
-            with ui.grid(columns=2).classes("w-full gap-4"):
+            with ui.grid(columns=2).classes("w-full gap-4 items-start"):
                 with ui.card().classes("p-4"):
                     ui.label("Command Preview").classes("text-lg font-semibold")
                     ui.label("Audit")
-                    audit_code = ui.code("")
+                    audit_code = ui.textarea().props("readonly outlined autogrow").classes("w-full")
                     ui.label("Upgrade Plan")
-                    plan_code = ui.code("")
+                    plan_code = ui.textarea().props("readonly outlined autogrow").classes("w-full")
 
                     def refresh_commands() -> None:
                         sync_state()
                         build_audit_command()
                         build_plan_command()
-                        audit_code.set_content(state.audit_command)
-                        plan_code.set_content(state.plan_command)
+                        audit_code.value = state.audit_command
+                        plan_code.value = state.plan_command
 
                     for widget in [class_select, channel_select, release_notes, offline]:
                         widget.on("update:model-value", lambda _: refresh_commands())
@@ -390,11 +430,13 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
 
                 with ui.card().classes("p-4"):
                     ui.label("Details").classes("text-lg font-semibold")
-                    render_details(details_col, None)
+                    details_content = ui.column().classes("w-full")
+                    render_details(details_content, None)
 
                 with ui.card().classes("p-4"):
                     ui.label("Upgrade Plan").classes("text-lg font-semibold")
-                    render_plan_summary(plan_col, [])
+                    plan_content = ui.column().classes("w-full")
+                    render_plan_summary(plan_content, [])
 
 
 ui.run(title="agent-cli-governor", reload=False)

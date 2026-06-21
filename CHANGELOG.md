@@ -30,8 +30,11 @@ The format is intentionally simple and human-maintained.
 - Added `--channel recommended|supported|all` upgrade filtering
 - Added `--json` output mode to `agent_cli_upgrade.py`
 - Added `--offline` mode to `agent_cli_upgrade.py`
-- Moved GUI audit and plan execution off the UI thread to avoid websocket disconnects
-- Added GUI timeout guidance, status filtering, outdated-only filtering, and an upgrade-plan summary panel
+- Improved the NiceGUI console so long-running audit and plan calls no longer break the page connection
+- The GUI console now surfaces timeout guidance and supports offline planning for faster local checks
+- The GUI audit view now respects `recommended` versus `supported` channel selection
+- The GUI now includes clearer status strips, more usable filtering, fuller command previews, and a working upgrade-plan summary panel
+- The GUI details panel now displays the selected row reliably, including notes, highlights, and action commands
 
 ### Project
 
@@ -39,3 +42,4 @@ The format is intentionally simple and human-maintained.
 - Consolidated documentation into the main README
 - Added minimal GitHub Actions CI
 - Added contributing guide and issue/PR templates
+- Added a README screenshot of the GUI console
