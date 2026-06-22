@@ -83,6 +83,16 @@ python3 -m pip install -r requirements-gui.txt
 python3 gui.py
 ```
 
+Enable NiceGUI hot reload during local GUI development:
+
+```bash
+python3 gui.py --reload
+```
+
+The GUI entrypoint is reload-safe for NiceGUI multiprocessing, so use the
+command above instead of wrapping `ui.run()` behind a plain `if __name__ == "__main__":`
+pattern in downstream forks.
+
 The GUI is intentionally a thin shell over the existing CLI tools:
 
 - `Overview` explains the upgrade model and shows static example data
@@ -91,7 +101,11 @@ The GUI is intentionally a thin shell over the existing CLI tools:
 - long-running audit and plan calls run in the background and surface timeout guidance
 - the first version does not execute real upgrades
 
-### GUI Screenshot
+### GUI Screenshot: Overview
+
+![agent-cli-governor GUI overview screenshot](./docs/assets/gui-overview.png)
+
+### GUI Screenshot: Console
 
 ![agent-cli-governor GUI console screenshot](./docs/assets/gui-console.png)
 
