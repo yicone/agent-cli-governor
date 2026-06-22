@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import json
 import subprocess
 from asyncio import wait_for
@@ -14,6 +15,12 @@ ROOT = Path(__file__).resolve().parent
 AUDIT = ROOT / "agent_cli_audit.py"
 UPGRADE = ROOT / "agent_cli_upgrade.py"
 SAMPLE_DATA = ROOT / "gui_sample_data.json"
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="NiceGUI shell for agent-cli-governor")
+    parser.add_argument("--reload", action="store_true", help="Enable NiceGUI hot reload for local GUI development")
+    return parser.parse_args()
 
 
 def run_json_command(args: list[str]) -> dict[str, Any]:
@@ -44,6 +51,20 @@ def risk_of(row: dict[str, Any]) -> str:
 def release_summary_of(row: dict[str, Any]) -> dict[str, Any]:
     summary = row.get("release_summary")
     return summary if isinstance(summary, dict) else {}
+
+
+def focus_upgrade_model() -> None:
+    ui.run_javascript(
+        """
+        const target = document.getElementById('decision-model');
+        if (!target) return;
+        target.scrollIntoView({behavior: 'smooth', block: 'start'});
+        const previous = target.style.boxShadow;
+        target.style.boxShadow = '0 0 0 4px rgba(217, 123, 41, 0.45)';
+        target.style.borderRadius = '12px';
+        setTimeout(() => { target.style.boxShadow = previous; }, 1800);
+        """
+    )
 
 
 class AppState:
@@ -329,7 +350,12 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
                 ui.label("This project checks version drift, install-channel drift, and changelog risk before you decide to upgrade.").classes("text-base text-gray-700")
                 with ui.row():
                     ui.button("View Console", on_click=lambda: tabs.set_value(console_tab))
-                    ui.button("Read Upgrade Model", on_click=lambda: ui.navigate.to("#decision-model")).props("outline")
+                    ui.button("Read Install-channel Model", on_click=focus_upgrade_model).props("outline")
+            with ui.column().classes("w-full gap-2"):
+                ui.label("Why upgrades are hard").classes("text-xl font-semibold")
+                ui.label(
+                    "These are the three recurring problems the project is designed to reduce before you decide whether to upgrade or migrate a CLI."
+                ).classes("text-sm text-gray-600")
             with ui.grid(columns=3).classes("w-full gap-4"):
                 for title, body in [
                     ("Version drift", "Installed CLIs lag upstream and are easy to forget."),
@@ -339,15 +365,22 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
                     with ui.card().classes("p-4"):
                         ui.label(title).classes("text-lg font-semibold")
                         ui.label(body).classes("text-sm text-gray-700")
-            with ui.row().classes("w-full gap-4").props("id=decision-model"):
-                for title, body, color in [
-                    ("recommended", "Vendor-preferred path for routine upgrades.", "bg-green-50"),
-                    ("supported", "Still supported, but not currently preferred.", "bg-amber-50"),
-                    ("nonstandard", "Needs manual review or migration.", "bg-red-50"),
-                ]:
-                    with ui.card().classes(f"p-4 flex-1 {color}"):
-                        ui.label(title).classes("text-lg font-semibold")
-                        ui.label(body).classes("text-sm text-gray-700")
+            with ui.card().classes("w-full p-5 border border-gray-200").props("id=decision-model"):
+                with ui.column().classes("w-full gap-2"):
+                    ui.label("Install-channel Upgrade Model").classes("text-xl font-semibold")
+                    ui.label(
+                        "agent-cli-governor classifies each installed CLI by how its current install channel relates to vendor guidance. "
+                        "This classification drives whether the tool recommends a routine upgrade, a broader review, or a migration."
+                    ).classes("text-sm text-gray-600")
+                with ui.row().classes("w-full gap-4 mt-3"):
+                    for title, body, color in [
+                        ("Status: recommended", "The current install channel matches the vendor-preferred path for routine upgrades.", "bg-green-50"),
+                        ("Status: supported", "The current channel still works and is supported, but it is no longer the preferred path.", "bg-amber-50"),
+                        ("Status: nonstandard", "The current install method has drifted far enough that manual review or migration is the safer next step.", "bg-red-50"),
+                    ]:
+                        with ui.card().classes(f"p-4 flex-1 {color}"):
+                            ui.label(title).classes("text-lg font-semibold")
+                            ui.label(body).classes("text-sm text-gray-700")
             with ui.card().classes("w-full p-4"):
                 ui.label("Example Audit").classes("text-xl font-semibold")
                 preview = ui.column().classes("w-full")
@@ -438,8 +471,13 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
                     plan_content = ui.column().classes("w-full")
                     render_plan_summary(plan_content, [])
 
-if __name__ == "__main__":
+if __name__ in {"__main__", "__mp_main__"}:
+    args = parse_args()
+    reload_mode = args.reload
+    print(f"Hot reload: {'enabled' if reload_mode else 'disabled'}")
+    if not reload_mode:
+        print("Hint: run `python3 gui.py --reload` for local GUI hot reload.")
     try:
-        ui.run(title="agent-cli-governor", reload=False)
+        ui.run(title="agent-cli-governor", reload=reload_mode)
     except KeyboardInterrupt:
         pass
