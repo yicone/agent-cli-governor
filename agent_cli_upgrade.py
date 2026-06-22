@@ -53,6 +53,13 @@ def is_upgrade_candidate(item: dict) -> bool:
     return True
 
 
+def release_risk_of(item: dict[str, Any]) -> str:
+    summary = item.get("release_summary")
+    if not isinstance(summary, dict):
+        return "unknown"
+    return summary.get("risk_level", "unknown")
+
+
 def channel_matches(item: dict, channel: str) -> bool:
     status = item.get("channel_status")
     if channel == "all":
@@ -108,7 +115,7 @@ def main() -> int:
 
     print("Upgrade plan:")
     for item in plan:
-        risk = item.get("release_summary", {}).get("risk_level", "unknown")
+        risk = release_risk_of(item)
         print(
             f"- {item['id']}: {item['current_version']} -> {item['latest_version']} "
             f"[class={item.get('tooling_class', 'agent-cli')}, {item['channel_status']}, risk={risk}] via {item['update_command']}"

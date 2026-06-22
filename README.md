@@ -123,6 +123,8 @@ The audit output distinguishes:
   The conservative in-channel upgrade path
 - `migration_command`
   A suggested migration path when the current install channel is no longer preferred
+- `release_risk`
+  A lightweight summary of upgrade-time change risk inferred from the latest release notes. It signals how risky or behavior-changing the newest upstream release may be to adopt, not the risk of staying on the current version.
 
 ## Notes
 

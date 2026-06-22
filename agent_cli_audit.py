@@ -75,7 +75,16 @@ def run(
 
 def load_catalog() -> list[dict[str, Any]]:
     data = json.loads(CATALOG_PATH.read_text())
-    return data["tools"]
+    tools = data.get("tools")
+    return tools if isinstance(tools, list) else []
+
+
+def safe_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def safe_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
 
 
 def tooling_class(record: dict[str, Any]) -> str:
@@ -117,6 +126,7 @@ def detect_channel(path: str, resolved_path: str) -> str:
 
 
 def classify_brew_channel(brew_info: dict[str, Any] | None) -> str:
+    brew_info = safe_dict(brew_info)
     if not brew_info:
         return "brew"
     tap = brew_info.get("tap")
@@ -133,6 +143,16 @@ def classify_brew_channel(brew_info: dict[str, Any] | None) -> str:
 def parse_version(text: str) -> str | None:
     match = SEMVER_RE.search(text)
     return match.group(0) if match else None
+
+
+def version_key(version: str) -> tuple[int, int, int, int] | None:
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)(?:[-+](.*))?$", version)
+    if not match:
+        return None
+    major, minor, patch = (int(match.group(i)) for i in range(1, 4))
+    suffix = match.group(4)
+    stable_rank = 1 if not suffix else 0
+    return (major, minor, patch, stable_rank)
 
 
 def get_current_version(command: str, version_args: list[list[str]]) -> tuple[str | None, str | None]:
@@ -165,13 +185,13 @@ def get_brew_info(package: str) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
 
-    formulae = payload.get("formulae", [])
+    formulae = safe_list(payload.get("formulae"))
     if formulae:
         item = formulae[0]
         item["kind"] = "formula"
         return item
 
-    casks = payload.get("casks", [])
+    casks = safe_list(payload.get("casks"))
     if casks:
         item = casks[0]
         item["kind"] = "cask"
@@ -180,6 +200,7 @@ def get_brew_info(package: str) -> dict[str, Any] | None:
 
 
 def brew_info_is_installed(brew_info: dict[str, Any] | None) -> bool:
+    brew_info = safe_dict(brew_info)
     if not brew_info:
         return False
     if brew_info.get("kind") == "formula":
@@ -244,6 +265,7 @@ def get_nested_field(payload: dict[str, Any], field: str) -> Any:
 
 
 def get_latest_from_source(source: dict[str, Any]) -> str | None:
+    source = safe_dict(source)
     source_type = source.get("type")
     url = source.get("url")
     if not source_type or not url:
@@ -282,6 +304,7 @@ def parse_github_repo_from_releases(url: str) -> tuple[str, str] | None:
 
 
 def summarize_release_notes(payload: dict[str, Any]) -> dict[str, Any]:
+    payload = safe_dict(payload)
     body = (payload.get("body") or "").strip()
     name = payload.get("name") or payload.get("tag_name") or ""
     published = payload.get("published_at")
@@ -357,6 +380,7 @@ def summarize_text_release(version: str, text: str, url: str, note: str | None =
 
 
 def get_custom_release_summary(config: dict[str, Any], latest_version: str | None) -> dict[str, Any] | None:
+    config = safe_dict(config)
     source_type = config.get("type")
     url = config.get("url")
     if not source_type or not url:
@@ -414,7 +438,7 @@ def get_release_summary(release_notes_url: str) -> dict[str, Any] | None:
         return None
     owner, name = repo
     payload = http_get_json(f"https://api.github.com/repos/{owner}/{name}/releases/latest")
-    if not payload:
+    if not isinstance(payload, dict) or not payload:
         return None
     return summarize_release_notes(payload)
 
@@ -464,7 +488,7 @@ def get_migration_command(record: dict[str, Any]) -> str | None:
 
 
 def get_migration_target(record: dict[str, Any]) -> str | None:
-    channels = record.get("recommended_channels", [])
+    channels = safe_list(record.get("recommended_channels"))
     if not channels:
         return None
     return channels[0]
@@ -475,15 +499,22 @@ def is_upgrade_candidate(row: dict[str, Any]) -> bool:
     latest = row.get("latest_version")
     if not current or not latest:
         return False
-    if current == latest:
+    current_parsed = version_key(current)
+    latest_parsed = version_key(latest)
+    if current_parsed is None or latest_parsed is None:
+        if current == latest:
+            return False
+    elif latest_parsed <= current_parsed:
         return False
     return row.get("channel_status") in {"recommended", "supported"} and row.get("update_command") != "See official install docs"
 
 
 def channel_status(record: dict[str, Any], normalized_channel: str) -> str:
-    if normalized_channel in record.get("recommended_channels", []):
+    recommended_channels = safe_list(record.get("recommended_channels"))
+    supported_channels = safe_list(record.get("supported_channels"))
+    if normalized_channel in recommended_channels:
         return "recommended"
-    if normalized_channel in record.get("supported_channels", []):
+    if normalized_channel in supported_channels:
         return "supported"
     family_aliases = {
         "brew-core": "brew",
@@ -491,9 +522,9 @@ def channel_status(record: dict[str, Any], normalized_channel: str) -> str:
         "brew-cask": "brew",
     }
     family = family_aliases.get(normalized_channel)
-    if family and family in record.get("supported_channels", []):
+    if family and family in supported_channels:
         return "supported"
-    if normalized_channel == "brew" and "brew" in record.get("supported_channels", []):
+    if normalized_channel == "brew" and "brew" in supported_channels:
         return "supported"
     return "nonstandard"
 
@@ -509,7 +540,7 @@ def build_result(record: dict[str, Any], online: bool, with_release_notes: bool)
     if detected_channel == "unknown" and path.startswith(str(Path.home() / ".local/bin")):
         detected_channel = "script"
 
-    brew_info = None
+    brew_info: dict[str, Any] | None = None
     normalized_channel = detected_channel
     latest_version = None
     extra = {}
@@ -517,11 +548,12 @@ def build_result(record: dict[str, Any], online: bool, with_release_notes: bool)
     if detected_channel in {"brew", "app-bundle", "script"} and record.get("brew_package"):
         brew_info = get_brew_info(record["brew_package"])
         if brew_info and (detected_channel == "brew" or brew_info_is_installed(brew_info)):
+            brew_info = safe_dict(brew_info)
             detected_channel = "brew"
             normalized_channel = classify_brew_channel(brew_info)
             extra["brew_tap"] = brew_info.get("tap")
             if brew_info.get("kind") == "formula":
-                latest_version = brew_info.get("versions", {}).get("stable")
+                latest_version = safe_dict(brew_info.get("versions")).get("stable")
             elif brew_info.get("kind") == "cask":
                 latest_version = brew_info.get("version")
 
@@ -544,9 +576,10 @@ def build_result(record: dict[str, Any], online: bool, with_release_notes: bool)
 
     current_version, version_raw = get_current_version(command, record["version_args"])
 
-    notes = record.get("channel_notes", {}).get(normalized_channel)
-    if not notes and normalized_channel == "brew" and record.get("channel_notes", {}).get("brew"):
-        notes = record["channel_notes"]["brew"]
+    channel_notes = safe_dict(record.get("channel_notes"))
+    notes = channel_notes.get(normalized_channel)
+    if not notes and normalized_channel == "brew" and channel_notes.get("brew"):
+        notes = channel_notes["brew"]
 
     migration_target = None
     migration_command = None
@@ -691,9 +724,18 @@ def main() -> int:
     catalog = load_catalog()
     rows: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
 
     for record in catalog:
-        item = build_result(record, online=not args.offline, with_release_notes=args.with_release_notes)
+        try:
+            item = build_result(record, online=not args.offline, with_release_notes=args.with_release_notes)
+        except Exception as exc:
+            errors.append({
+                "id": record.get("id", "unknown"),
+                "name": record.get("name", "unknown"),
+                "error": str(exc),
+            })
+            continue
         if item is None:
             missing.append({
                 "id": record["id"],
@@ -710,6 +752,8 @@ def main() -> int:
         payload: dict[str, Any] = {"installed": rows}
         if args.all:
             payload["missing"] = missing
+        if errors:
+            payload["errors"] = errors
         print(json.dumps(payload, indent=2, ensure_ascii=True))
         return 0
 
@@ -724,6 +768,12 @@ def main() -> int:
         for item in missing:
             commands = ", ".join(item["commands"])
             print(f"  - {item['id']}: not found in PATH (checked: {commands})")
+
+    if errors:
+        print()
+        print("Audit warnings:")
+        for item in errors:
+            print(f"  - {item['id']}: {item['error']}")
 
     topgrade = shutil.which("topgrade")
     if topgrade:
