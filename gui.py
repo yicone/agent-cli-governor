@@ -438,5 +438,8 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
                     plan_content = ui.column().classes("w-full")
                     render_plan_summary(plan_content, [])
 
-
-ui.run(title="agent-cli-governor", reload=False)
+if __name__ == "__main__":
+    try:
+        ui.run(title="agent-cli-governor", reload=False)
+    except KeyboardInterrupt:
+        pass
