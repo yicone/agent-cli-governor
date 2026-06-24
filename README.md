@@ -28,6 +28,7 @@ The main focus is `agent-cli` tools such as:
 - Gemini CLI
 - Kiro CLI
 - Devin CLI
+- Hermes CLI
 - Copilot CLI
 - OpenCode
 - Multica
@@ -133,6 +134,7 @@ The audit output distinguishes:
 - `--only-nonstandard` narrows the report to tools whose install channel does not match the vendor's supported or recommended channels.
 - `--only-class` lets you separate true Agent CLIs from adjacent tooling/runtime dependencies such as `uv`.
 - `--with-release-notes` fetches the latest release notes where possible and produces a simple risk summary. GitHub Releases are supported directly, and a few vendor-hosted changelog pages are summarized heuristically.
+- Some CLIs expose their own supported self-update flow. For example, `codex` uses `codex update`, and `hermes` uses `hermes update` when the current install channel is still supported for routine upgrades.
 - The tool catalog lives in `agent_cli_catalog.json`.
 - Most entries are `agent-cli`. A small number of adjacent tools can be retained as `tooling-runtime` when they matter to the same upgrade/governance workflow.
 - The audit output separates `update_command` from `migration_command`. Use the first for in-channel upgrades, and the second when the current install method should be replaced with the vendor-recommended one.
