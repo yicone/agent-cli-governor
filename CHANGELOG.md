@@ -6,7 +6,15 @@ The format is intentionally simple and human-maintained.
 
 ## Unreleased
 
-- No unreleased changes yet.
+### Added
+
+- Support for `Hermes CLI` in the local audit and upgrade catalog
+
+### Changed
+
+- `codex` routine upgrade commands now use the built-in `codex update` flow
+- `hermes` routine upgrade commands use the built-in `hermes update` flow
+- README scope and notes now document Hermes support and self-update behavior
 
 ## 2026-06-22
 
