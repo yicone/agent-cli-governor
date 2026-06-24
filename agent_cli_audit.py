@@ -445,6 +445,10 @@ def get_release_summary(release_notes_url: str) -> dict[str, Any] | None:
 
 def get_update_command(record: dict[str, Any], normalized_channel: str) -> str:
     tool = record["id"]
+    if tool == "codex":
+        return "codex update"
+    if tool == "hermes":
+        return "hermes update"
     if tool == "amp":
         return "amp update"
     if normalized_channel in {"brew", "brew-core", "brew-tap", "brew-cask"} and record.get("brew_package"):

@@ -222,6 +222,25 @@
       }
     },
     {
+      "id": "hermes",
+      "name": "Hermes Agent CLI",
+      "tooling_class": "agent-cli",
+      "commands": ["hermes"],
+      "version_args": [["--version"], ["version"]],
+      "latest_source": {
+        "type": "regex",
+        "url": "https://api.github.com/repos/NousResearch/hermes-agent/releases/latest",
+        "pattern": "\"tag_name\"\\s*:\\s*\"v?([^\"]+)\""
+      },
+      "official_install_url": "https://hermes-agent.nousresearch.com/docs/getting-started/installation",
+      "official_release_notes_url": "https://github.com/NousResearch/hermes-agent/releases",
+      "recommended_channels": ["script"],
+      "supported_channels": ["script"],
+      "channel_notes": {
+        "script": "CLI-only installs on macOS/Linux currently lead with the official install script, and Hermes supports self-update via `hermes update`."
+      }
+    },
+    {
       "id": "cline",
       "name": "Cline CLI",
       "tooling_class": "agent-cli",
