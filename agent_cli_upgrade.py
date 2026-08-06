@@ -15,15 +15,18 @@ AUDIT = ROOT / "agent_cli_audit.py"
 SEMVER_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)(?:[-+](.*))?$")
 
 
-def load_audit(*, offline: bool) -> list[dict[str, Any]]:
+def load_audit(*, offline: bool, tooling_class: str | None = None) -> list[dict[str, Any]]:
     args = [str(AUDIT), "--json"]
     if offline:
         args.append("--offline")
+    if tooling_class:
+        args.extend(["--only-class", tooling_class])
     completed = subprocess.run(
         args,
         text=True,
         capture_output=True,
         check=True,
+        timeout=75,
     )
     payload = json.loads(completed.stdout)
     return payload["installed"]
@@ -102,6 +105,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Safe wrapper for upgrading audited agent CLIs.")
     parser.add_argument("--json", action="store_true", help="Output the upgrade plan as JSON.")
     parser.add_argument("--offline", action="store_true", help="Use offline audit mode for faster but less complete planning.")
+    parser.add_argument("--only-class", choices=["agent-cli", "tooling-runtime"], help="Only plan entries from a specific tooling class.")
     parser.add_argument("--tool", action="append", dest="tools", help="Tool id to upgrade. Repeatable.")
     parser.add_argument("--apply", action="store_true", help="Execute upgrades. Without this flag, only print the plan.")
     parser.add_argument("--yes", action="store_true", help="Skip the interactive confirmation when used with --apply.")
@@ -111,7 +115,7 @@ def main() -> int:
 
     selected = set(args.tools or [])
     channel = "recommended" if args.recommended_only else args.channel
-    items = load_audit(offline=args.offline)
+    items = load_audit(offline=args.offline, tooling_class=args.only_class)
     plan = build_plan(items, selected if selected else None, channel)
 
     if not plan:

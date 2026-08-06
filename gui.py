@@ -4,13 +4,15 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import re
+import signal
 import subprocess
 import traceback
-from asyncio import wait_for
 from pathlib import Path
 from typing import Any
 
+from agent_cli_upgrade import build_plan
 from nicegui import run, ui
 
 
@@ -18,8 +20,13 @@ ROOT = Path(__file__).resolve().parent
 AUDIT = ROOT / "agent_cli_audit.py"
 UPGRADE = ROOT / "agent_cli_upgrade.py"
 SAMPLE_DATA = ROOT / "gui_sample_data.json"
-AUDIT_TIMEOUT_SECONDS = 75
-PLAN_TIMEOUT_SECONDS = 60
+AUDIT_TIMEOUT_SECONDS = 60
+PLAN_TIMEOUT_SECONDS = 45
+RELEASE_NOTES_TIMEOUT_SECONDS = 45
+
+
+class CommandTimeoutError(RuntimeError):
+    pass
 
 
 def parse_args() -> argparse.Namespace:
@@ -28,8 +35,34 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def run_json_command(args: list[str]) -> dict[str, Any]:
-    completed = subprocess.run(args, text=True, capture_output=True, cwd=ROOT)
+def run_json_command(args: list[str], timeout_seconds: int) -> dict[str, Any]:
+    process = subprocess.Popen(
+        args,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=ROOT,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            stdout, stderr = process.communicate(timeout=3)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            stdout, stderr = process.communicate()
+        raise CommandTimeoutError(
+            f"Command exceeded {timeout_seconds}s and was stopped. {stderr.strip()}"
+        )
+    completed = subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
     if completed.returncode != 0:
         raise RuntimeError(completed.stderr.strip() or completed.stdout.strip() or "Command failed")
     return json.loads(completed.stdout)
@@ -133,13 +166,13 @@ class AppState:
         self.plan_command = ""
         self.current_class = "agent-cli"
         self.current_channel = "recommended"
-        self.release_notes = True
         self.offline = False
         self.is_running = False
         self.status_filter = "all"
         self.only_outdated = False
         self.last_error = ""
         self.audit_errors: list[dict[str, str]] = []
+        self.audit_context: tuple[str, bool] | None = None
 
     def log(self, message: str) -> None:
         self.activity.append(message)
@@ -152,8 +185,6 @@ state = AppState()
 
 def build_audit_command() -> list[str]:
     args = ["python3", str(AUDIT), "--json", "--only-class", state.current_class]
-    if state.release_notes:
-        args.append("--with-release-notes")
     if state.offline:
         args.append("--offline")
     state.audit_command = " ".join(args)
@@ -161,7 +192,7 @@ def build_audit_command() -> list[str]:
 
 
 def build_plan_command() -> list[str]:
-    args = ["python3", str(UPGRADE), "--json", "--channel", state.current_channel]
+    args = ["python3", str(UPGRADE), "--json", "--channel", state.current_channel, "--only-class", state.current_class]
     if state.offline:
         args.append("--offline")
     state.plan_command = " ".join(args)
@@ -484,12 +515,13 @@ async def run_audit(
         status_label.set_text("Running audit...")
         spinner.visible = True
         stage = "command"
-        payload = await wait_for(asyncio.to_thread(run_json_command, build_audit_command()), timeout=AUDIT_TIMEOUT_SECONDS)
+        payload = await asyncio.to_thread(run_json_command, build_audit_command(), AUDIT_TIMEOUT_SECONDS)
         if not isinstance(payload, dict):
             raise RuntimeError(f"Unexpected audit payload type: {type(payload).__name__}")
         stage = "payload"
         state.audit_rows = payload.get("installed") or []
         state.audit_errors = error_entries(payload.get("errors"))
+        state.audit_context = (state.current_class, state.offline)
         stage = "summary"
         refresh_summary(summary_row, state.audit_rows)
         stage = "action_queue"
@@ -506,8 +538,8 @@ async def run_audit(
         )
         status_label.set_text(f"Audit completed. {len(filter_rows(state.audit_rows))} row(s) shown. Warnings: {len(state.audit_errors)}.")
         ui.notify(f"Audit completed ({len(state.audit_errors)} warning(s))", type="positive")
-    except TimeoutError:
-        activity_col.push(f"Audit timed out after {AUDIT_TIMEOUT_SECONDS}s. Try enabling Offline mode for a quicker local-only check.")
+    except CommandTimeoutError:
+        activity_col.push(f"Audit exceeded {AUDIT_TIMEOUT_SECONDS}s and was stopped. Try Offline mode for a quicker local-only check.")
         status_label.set_text("Audit timed out.")
         ui.notify("Audit timed out. Try Offline mode.", type="warning")
     except Exception as exc:
@@ -552,17 +584,22 @@ async def run_plan(activity_col: ui.log, status_label: ui.label, spinner: ui.spi
         return
     state.is_running = True
     try:
-        activity_col.push("Running upgrade plan...")
-        status_label.set_text("Running upgrade plan...")
+        activity_col.push("Generating upgrade plan...")
+        status_label.set_text("Generating upgrade plan...")
         spinner.visible = True
-        payload = await wait_for(asyncio.to_thread(run_json_command, build_plan_command()), timeout=PLAN_TIMEOUT_SECONDS)
-        state.plan_rows = payload["plan"]
+        if state.audit_context == (state.current_class, state.offline):
+            state.plan_rows = build_plan(state.audit_rows, None, state.current_channel)
+            activity_col.push("Upgrade plan reused the most recent matching audit result.")
+        else:
+            payload = await asyncio.to_thread(run_json_command, build_plan_command(), PLAN_TIMEOUT_SECONDS)
+            state.plan_rows = payload["plan"]
+            activity_col.push("Upgrade plan ran a fresh audit because no matching audit result was available.")
         render_plan_summary(plan_container, state.plan_rows)
         activity_col.push(f"Upgrade plan completed with {len(state.plan_rows)} candidate(s).")
         status_label.set_text(f"Upgrade plan completed with {len(state.plan_rows)} candidate(s).")
         ui.notify(f"Upgrade plan completed: {len(state.plan_rows)} candidate(s)", type="positive")
-    except TimeoutError:
-        activity_col.push(f"Upgrade plan timed out after {PLAN_TIMEOUT_SECONDS}s. Try enabling Offline mode first.")
+    except CommandTimeoutError:
+        activity_col.push(f"Upgrade plan exceeded {PLAN_TIMEOUT_SECONDS}s and was stopped. Run Audit first or try Offline mode.")
         status_label.set_text("Upgrade plan timed out.")
         ui.notify("Upgrade plan timed out. Try Offline mode.", type="warning")
     except Exception as exc:
@@ -570,6 +607,55 @@ async def run_plan(activity_col: ui.log, status_label: ui.label, spinner: ui.spi
         activity_col.push(f"Upgrade plan failed: {exc}")
         status_label.set_text("Upgrade plan failed.")
         ui.notify(f"Upgrade plan failed: {exc}", type="negative")
+    finally:
+        spinner.visible = False
+        state.is_running = False
+
+
+async def run_release_notes(
+    table_col: ui.column,
+    details: ui.column,
+    activity_col: ui.log,
+    status_label: ui.label,
+    spinner: ui.spinner,
+) -> None:
+    if state.is_running:
+        ui.notify("A task is already running", type="warning")
+        return
+    item = row_dict(state.selected_row)
+    if not item:
+        ui.notify("Select a table row first", type="warning")
+        return
+    if state.offline:
+        ui.notify("Release notes require online mode", type="warning")
+        return
+    state.is_running = True
+    try:
+        activity_col.push(f"Loading release notes for {item['id']}...")
+        status_label.set_text(f"Loading release notes for {item['id']}...")
+        spinner.visible = True
+        args = [
+            "python3", str(AUDIT), "--json", "--tool", item["id"],
+            "--only-class", state.current_class, "--with-release-notes",
+        ]
+        payload = await asyncio.to_thread(run_json_command, args, RELEASE_NOTES_TIMEOUT_SECONDS)
+        refreshed = next((row for row in payload.get("installed", []) if row.get("id") == item["id"]), None)
+        if not isinstance(refreshed, dict):
+            raise RuntimeError("Selected CLI was not returned by the release-notes audit")
+        state.audit_rows = [refreshed if row.get("id") == item["id"] else row for row in state.audit_rows]
+        state.selected_row = refreshed
+        render_table(table_col, state.audit_rows, details)
+        render_details(details, refreshed)
+        activity_col.push(f"Release notes loaded for {item['id']}.")
+        status_label.set_text(f"Release notes loaded for {item['id']}.")
+    except CommandTimeoutError:
+        activity_col.push(f"Release notes for {item['id']} exceeded {RELEASE_NOTES_TIMEOUT_SECONDS}s and were stopped.")
+        status_label.set_text("Release notes timed out.")
+        ui.notify("Release notes timed out; the audit result is unchanged.", type="warning")
+    except Exception as exc:
+        activity_col.push(f"Release notes failed: {exc}")
+        status_label.set_text("Release notes failed.")
+        ui.notify(f"Release notes failed: {exc}", type="negative")
     finally:
         spinner.visible = False
         state.is_running = False
@@ -637,8 +723,8 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
                 with ui.row().classes("items-center gap-3 w-full flex-wrap"):
                     class_select = ui.select(["agent-cli", "tooling-runtime"], value="agent-cli", label="Class")
                     channel_select = ui.select(["recommended", "supported", "all"], value="recommended", label="Channel")
-                    release_notes = ui.switch("Release Notes", value=True)
                     offline = ui.switch("Offline", value=False)
+                    ui.label("Release notes load on demand after selecting a row.").classes("text-sm text-gray-600")
 
                     summary_row = ui.column().classes("w-full gap-2 mt-4")
                     status_strip = ui.column().classes("w-full gap-2 mt-2")
@@ -651,7 +737,6 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
                     def sync_state() -> None:
                         state.current_class = class_select.value
                         state.current_channel = channel_select.value
-                        state.release_notes = bool(release_notes.value)
                         state.offline = bool(offline.value)
 
                     def refresh_current_table() -> None:
@@ -670,8 +755,13 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
                             sync_state()
                             await run_plan(activity_log, status_label, spinner, plan_content)
 
+                        async def handle_release_notes() -> None:
+                            sync_state()
+                            await run_release_notes(table_col, details_content, activity_log, status_label, spinner)
+
                         ui.button("Run Audit", on_click=handle_audit)
-                        ui.button("Run Upgrade Plan", on_click=handle_plan)
+                        ui.button("Generate Upgrade Plan", on_click=handle_plan)
+                        ui.button("Load Release Notes", on_click=handle_release_notes).props("outline")
                         ui.button("Refresh", on_click=handle_audit)
                         ui.button("Copy Summary", on_click=lambda: ui.run_javascript(f"navigator.clipboard.writeText({json.dumps({'audit': state.audit_command, 'plan': state.plan_command})!r})"))
 
@@ -704,7 +794,7 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
                             audit_code.value = state.audit_command
                             plan_code.value = state.plan_command
 
-                        for widget in [class_select, channel_select, release_notes, offline]:
+                        for widget in [class_select, channel_select, offline]:
                             widget.on("update:model-value", lambda _: refresh_commands())
                         refresh_commands()
 

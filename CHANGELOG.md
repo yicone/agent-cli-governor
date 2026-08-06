@@ -15,6 +15,10 @@ The format is intentionally simple and human-maintained.
 - Upgrade plans now show one channel-aware primary action with its rationale and installation-channel effect; alternatives are informational and never run by `--apply`
 - npm/Homebrew installs now keep package-manager ownership when native self-update behavior is unverified; Kilo Code and OpenCode use explicit `--method` arguments to preserve their detected method
 - Claude Code now uses `claude update`, while an app-bundled Codex CLI directs users to update ChatGPT.app instead of proposing a standalone CLI command
+- GUI audits no longer block on release-note retrieval; release notes load on demand for the selected CLI, and generated upgrade plans reuse the matching audit result when available
+- GUI timeouts now stop their child process groups, preventing timed-out audits from continuing in the background and causing later requests to contend
+- Online audits now probe up to four CLIs concurrently, bound HTTP/package-manager lookups, and report unreachable version sources as audit warnings instead of consuming the whole GUI timeout
+- npm and Homebrew version lookups now inherit the proxy resolved from macOS system settings when no explicit proxy environment is set
 - README scope and notes now document Hermes support and self-update behavior
 
 ## 2026-06-22

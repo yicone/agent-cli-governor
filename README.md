@@ -97,9 +97,12 @@ pattern in downstream forks.
 The GUI is intentionally a thin shell over the existing CLI tools:
 
 - `Overview` explains the upgrade model and shows static example data
-- `Console` runs local audit and dry-run upgrade-plan commands
-- `Console` includes status filtering, outdated-only filtering, and an upgrade-plan result panel
-- long-running audit and plan calls run in the background and surface timeout guidance
+- `Console` runs a local audit and generates a dry-run upgrade plan; it never executes upgrades
+- `Generate Upgrade Plan` reuses the latest matching audit result when possible, avoiding a second full network audit
+- `Load Release Notes` fetches notes only for the selected row, so changelog retrieval does not block the main audit
+- online audit probes up to four CLIs concurrently; individual HTTP and package-manager lookups are bounded and failures appear under `Audit Warnings`
+- Python HTTP lookups use the default `urllib` proxy resolution: `HTTP_PROXY`/`HTTPS_PROXY` take precedence, with macOS system proxy settings used when those variables are absent; that resolved proxy is also passed to `npm` and Homebrew lookups
+- long-running subprocesses have a bounded timeout and are stopped on timeout rather than left running in the background
 - the first version does not execute real upgrades
 
 ### GUI Screenshot: Overview
@@ -143,6 +146,7 @@ The audit output distinguishes:
 - The audit output separates the selected `update_command` from `migration_command`. `upgrade_guidance` explains which action is selected, how it affects installation ownership, and when an alternative is only for review or troubleshooting.
 - `agent_cli_upgrade.py` only upgrades entries that are both outdated and on a recognized supported or recommended channel.
 - `agent_cli_upgrade.py --offline` reuses offline audit mode for faster but less complete upgrade planning.
+- `agent_cli_upgrade.py --only-class agent-cli` limits planning to the same class boundary used by the audit.
 - `agent_cli_upgrade.py --channel recommended` narrows the plan to vendor-recommended install channels only.
 - `agent_cli_upgrade.py --channel supported` is the default and includes both recommended and supported channels.
 - `--recommended-only` is kept as a compatibility alias for `--channel recommended`.

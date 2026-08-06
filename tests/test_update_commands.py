@@ -1,6 +1,7 @@
 import unittest
+from unittest.mock import patch
 
-from agent_cli_audit import get_update_command, upgrade_guidance
+from agent_cli_audit import get_update_command, system_proxy_env, upgrade_guidance
 
 
 class UpgradeGuidanceTests(unittest.TestCase):
@@ -57,6 +58,18 @@ class UpgradeGuidanceTests(unittest.TestCase):
         )
 
         self.assertEqual(command, "npm install -g @google/gemini-cli@latest")
+
+    def test_bridges_macos_proxy_to_child_process_environment(self) -> None:
+        with patch("agent_cli_audit.urllib.request.getproxies", return_value={"http": "http://127.0.0.1:7890"}):
+            self.assertEqual(
+                system_proxy_env(),
+                {
+                    "HTTP_PROXY": "http://127.0.0.1:7890",
+                    "http_proxy": "http://127.0.0.1:7890",
+                    "HTTPS_PROXY": "http://127.0.0.1:7890",
+                    "https_proxy": "http://127.0.0.1:7890",
+                },
+            )
 
 
 if __name__ == "__main__":

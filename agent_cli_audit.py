@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import json
 import os
 import re
@@ -39,6 +40,10 @@ HIGH_RISK_TERMS = [
     "permission",
     "security",
 ]
+HTTP_TIMEOUT_SECONDS = 8
+HTTP_ATTEMPTS = 2
+PACKAGE_MANAGER_TIMEOUT_SECONDS = 12
+AUDIT_WORKERS = 4
 MEDIUM_RISK_TERMS = [
     "hook",
     "plugin",
@@ -59,8 +64,14 @@ def run(
     env: dict[str, str] | None = None,
     timeout: int = 20,
     check: bool = False,
+    use_system_proxy: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     merged_env = os.environ.copy()
+    if use_system_proxy:
+        # npm and Homebrew do not read macOS proxy settings themselves. Bridge the
+        # proxy selected by urllib into the conventional child-process variables.
+        for name, value in system_proxy_env().items():
+            merged_env.setdefault(name, value)
     if env:
         merged_env.update(env)
     return subprocess.run(
@@ -71,6 +82,18 @@ def run(
         timeout=timeout,
         check=check,
     )
+
+
+def system_proxy_env() -> dict[str, str]:
+    proxies = urllib.request.getproxies()
+    http_proxy = proxies.get("http")
+    https_proxy = proxies.get("https") or http_proxy
+    proxy_env: dict[str, str] = {}
+    if http_proxy:
+        proxy_env.update({"HTTP_PROXY": http_proxy, "http_proxy": http_proxy})
+    if https_proxy:
+        proxy_env.update({"HTTPS_PROXY": https_proxy, "https_proxy": https_proxy})
+    return proxy_env
 
 
 def load_catalog() -> list[dict[str, Any]]:
@@ -169,14 +192,23 @@ def get_current_version(command: str, version_args: list[list[str]]) -> tuple[st
     return None, last_error if "last_error" in locals() else None
 
 
-def get_brew_info(package: str) -> dict[str, Any] | None:
+def get_brew_info(package: str, warnings: list[str] | None = None) -> dict[str, Any] | None:
+    if not shutil.which("brew"):
+        return None
     try:
         completed = run(
             ["brew", "info", "--json=v2", package],
             env={"HOMEBREW_NO_AUTO_UPDATE": "1"},
-            timeout=30,
+            timeout=PACKAGE_MANAGER_TIMEOUT_SECONDS,
+            use_system_proxy=True,
         )
-    except Exception:
+    except subprocess.TimeoutExpired:
+        if warnings is not None:
+            warnings.append(f"brew info {package} timed out after {PACKAGE_MANAGER_TIMEOUT_SECONDS}s")
+        return None
+    except Exception as exc:
+        if warnings is not None:
+            warnings.append(f"brew info {package} failed: {exc}")
         return None
     if completed.returncode != 0:
         return None
@@ -210,19 +242,33 @@ def brew_info_is_installed(brew_info: dict[str, Any] | None) -> bool:
     return False
 
 
-def get_npm_latest(package: str) -> str | None:
+def get_npm_latest(package: str, warnings: list[str] | None = None) -> str | None:
     try:
-        completed = run(["npm", "view", package, "version"], timeout=20)
-    except Exception:
+        completed = run(
+            ["npm", "view", package, "version"],
+            timeout=PACKAGE_MANAGER_TIMEOUT_SECONDS,
+            use_system_proxy=True,
+        )
+    except subprocess.TimeoutExpired:
+        if warnings is not None:
+            warnings.append(f"npm view {package} timed out after {PACKAGE_MANAGER_TIMEOUT_SECONDS}s")
+        return None
+    except Exception as exc:
+        if warnings is not None:
+            warnings.append(f"npm view {package} failed: {exc}")
         return None
     if completed.returncode != 0:
+        if warnings is not None:
+            message = completed.stderr.strip() or completed.stdout.strip() or "non-zero exit"
+            warnings.append(f"npm view {package} failed: {message}")
         return None
     version = completed.stdout.strip()
     return version or None
 
 
-def http_get_json(url: str) -> dict[str, Any] | None:
-    for _ in range(3):
+def http_get_json(url: str, warnings: list[str] | None = None) -> dict[str, Any] | None:
+    last_error = "request failed"
+    for _ in range(HTTP_ATTEMPTS):
         request = urllib.request.Request(
             url,
             headers={
@@ -231,15 +277,20 @@ def http_get_json(url: str) -> dict[str, Any] | None:
             },
         )
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:
+            # urllib's default opener honors HTTP(S)_PROXY and macOS system proxy settings.
+            with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
                 return json.loads(response.read().decode("utf-8"))
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError):
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError) as exc:
+            last_error = str(exc)
             continue
+    if warnings is not None:
+        warnings.append(f"GET {url} failed after {HTTP_ATTEMPTS} attempt(s): {last_error}")
     return None
 
 
-def http_get_text(url: str) -> str | None:
-    for _ in range(3):
+def http_get_text(url: str, warnings: list[str] | None = None) -> str | None:
+    last_error = "request failed"
+    for _ in range(HTTP_ATTEMPTS):
         request = urllib.request.Request(
             url,
             headers={
@@ -248,10 +299,14 @@ def http_get_text(url: str) -> str | None:
             },
         )
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:
+            # urllib's default opener honors HTTP(S)_PROXY and macOS system proxy settings.
+            with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
                 return response.read().decode("utf-8", errors="replace")
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError):
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError) as exc:
+            last_error = str(exc)
             continue
+    if warnings is not None:
+        warnings.append(f"GET {url} failed after {HTTP_ATTEMPTS} attempt(s): {last_error}")
     return None
 
 
@@ -264,19 +319,19 @@ def get_nested_field(payload: dict[str, Any], field: str) -> Any:
     return current
 
 
-def get_latest_from_source(source: dict[str, Any]) -> str | None:
+def get_latest_from_source(source: dict[str, Any], warnings: list[str] | None = None) -> str | None:
     source = safe_dict(source)
     source_type = source.get("type")
     url = source.get("url")
     if not source_type or not url:
         return None
     if source_type == "text":
-        text = http_get_text(url)
+        text = http_get_text(url, warnings)
         if not text:
             return None
         return text.strip().splitlines()[0].strip() or None
     if source_type == "regex":
-        text = http_get_text(url)
+        text = http_get_text(url, warnings)
         if not text:
             return None
         pattern = source.get("pattern")
@@ -285,7 +340,7 @@ def get_latest_from_source(source: dict[str, Any]) -> str | None:
         match = re.search(pattern, text)
         return match.group(1) if match else None
     if source_type == "json":
-        payload = http_get_json(url)
+        payload = http_get_json(url, warnings)
         if not payload:
             return None
         field = source.get("field")
@@ -667,10 +722,11 @@ def build_result(record: dict[str, Any], online: bool, with_release_notes: bool)
     brew_info: dict[str, Any] | None = None
     normalized_channel = detected_channel
     latest_version = None
-    extra = {}
+    extra: dict[str, Any] = {}
+    warnings: list[str] = []
 
     if detected_channel in {"brew", "app-bundle", "script"} and record.get("brew_package"):
-        brew_info = get_brew_info(record["brew_package"])
+        brew_info = get_brew_info(record["brew_package"], warnings)
         if brew_info and (detected_channel == "brew" or brew_info_is_installed(brew_info)):
             brew_info = safe_dict(brew_info)
             detected_channel = "brew"
@@ -682,21 +738,20 @@ def build_result(record: dict[str, Any], online: bool, with_release_notes: bool)
                 latest_version = brew_info.get("version")
 
     if online and record.get("latest_source"):
-        source_latest = get_latest_from_source(record["latest_source"])
+        source_latest = get_latest_from_source(record["latest_source"], warnings)
         if source_latest:
             extra["source_latest"] = source_latest
             if latest_version is None or normalized_channel in {"script", "app-bundle", "unknown"}:
                 latest_version = source_latest
 
-    if online and latest_version is None and record.get("npm_package") and normalized_channel == "npm":
-        latest_version = get_npm_latest(record["npm_package"])
-
     if online and record["id"] in {"codex", "gemini", "opencode", "kilocode", "droid", "copilot"} and record.get("npm_package"):
-        npm_latest = get_npm_latest(record["npm_package"])
+        npm_latest = get_npm_latest(record["npm_package"], warnings)
         if npm_latest:
             extra["npm_latest"] = npm_latest
             if normalized_channel == "npm":
                 latest_version = npm_latest
+    elif online and latest_version is None and record.get("npm_package") and normalized_channel == "npm":
+        latest_version = get_npm_latest(record["npm_package"], warnings)
 
     current_version, version_raw = get_current_version(command, record["version_args"])
 
@@ -743,6 +798,8 @@ def build_result(record: dict[str, Any], online: bool, with_release_notes: bool)
             result["release_summary"] = release_summary
     result["upgrade_candidate"] = is_upgrade_candidate(result)
     result.update(extra)
+    if warnings:
+        result["audit_warnings"] = warnings
     return result
 
 
@@ -842,6 +899,7 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="Output JSON.")
     parser.add_argument("--all", action="store_true", help="Show all catalog entries, including missing ones.")
     parser.add_argument("--offline", action="store_true", help="Skip network-backed latest version checks.")
+    parser.add_argument("--tool", action="append", dest="tools", help="Only audit this tool id. Repeatable.")
     parser.add_argument("--with-release-notes", action="store_true", help="Fetch latest GitHub release notes and risk summary where possible.")
     parser.add_argument("--only-outdated", action="store_true", help="Only show installed tools that are upgrade candidates.")
     parser.add_argument("--only-nonstandard", action="store_true", help="Only show installed tools on nonstandard install channels.")
@@ -853,26 +911,41 @@ def main() -> int:
     missing: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
 
-    for record in catalog:
-        try:
-            item = build_result(record, online=not args.offline, with_release_notes=args.with_release_notes)
-        except Exception as exc:
-            errors.append({
-                "id": record.get("id", "unknown"),
-                "name": record.get("name", "unknown"),
-                "error": str(exc),
-            })
-            continue
-        if item is None:
-            missing.append({
-                "id": record["id"],
-                "name": record["name"],
-                "commands": record["commands"],
-            })
-            continue
-        rows.append(item)
+    selected = set(args.tools or [])
+    records = [record for record in catalog if not selected or record.get("id") in selected]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(AUDIT_WORKERS, len(records) or 1)) as executor:
+        futures = {
+            executor.submit(build_result, record, online=not args.offline, with_release_notes=args.with_release_notes): record
+            for record in records
+        }
+        for future in concurrent.futures.as_completed(futures):
+            record = futures[future]
+            try:
+                item = future.result()
+            except Exception as exc:
+                errors.append({
+                    "id": record.get("id", "unknown"),
+                    "name": record.get("name", "unknown"),
+                    "error": str(exc),
+                })
+                continue
+            if item is None:
+                missing.append({
+                    "id": record["id"],
+                    "name": record["name"],
+                    "commands": record["commands"],
+                })
+                continue
+            for warning in safe_list(item.get("audit_warnings")):
+                errors.append({
+                    "id": record["id"],
+                    "name": record["name"],
+                    "error": str(warning),
+                })
+            rows.append(item)
 
     rows.sort(key=lambda row: row["id"])
+    errors.sort(key=lambda item: (item["id"], item["error"]))
     rows = filter_rows(rows, args.only_outdated, args.only_nonstandard, args.only_class)
 
     if args.json:
