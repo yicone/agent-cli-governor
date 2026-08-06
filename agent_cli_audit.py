@@ -443,14 +443,8 @@ def get_release_summary(release_notes_url: str) -> dict[str, Any] | None:
     return summarize_release_notes(payload)
 
 
-def get_update_command(record: dict[str, Any], normalized_channel: str) -> str:
+def channel_update_command(record: dict[str, Any], normalized_channel: str) -> str | None:
     tool = record["id"]
-    if tool == "codex":
-        return "codex update"
-    if tool == "hermes":
-        return "hermes update"
-    if tool == "amp":
-        return "amp update"
     if normalized_channel in {"brew", "brew-core", "brew-tap", "brew-cask"} and record.get("brew_package"):
         package = record["brew_package"]
         if normalized_channel == "brew-cask":
@@ -459,19 +453,145 @@ def get_update_command(record: dict[str, Any], normalized_channel: str) -> str:
     if normalized_channel == "npm" and record.get("npm_package"):
         return f"npm install -g {record['npm_package']}@latest"
     if normalized_channel == "script":
-        if tool == "codex":
-            return "curl -fsSL https://chatgpt.com/codex/install.sh | sh"
-        if tool == "claude":
-            return "curl -fsSL https://claude.ai/install.sh | bash"
-        if tool == "amp":
-            return "amp update"
-        if tool == "droid":
-            return "curl -fsSL https://app.factory.ai/cli | sh"
         if tool == "kiro-cli":
             return "curl -fsSL https://cli.kiro.dev/install | bash"
         if tool == "uv":
             return "curl -LsSf https://astral.sh/uv/install.sh | sh"
-    return "See official install docs"
+    return None
+
+
+def native_update_command(tool: str, normalized_channel: str) -> str | None:
+    method_map = {
+        "brew": "brew",
+        "brew-core": "brew",
+        "brew-tap": "brew",
+        "brew-cask": "brew",
+        "github-release": "curl",
+        "script": "curl",
+        "npm": "npm",
+    }
+    if tool in {"kilocode", "opencode"}:
+        method = method_map.get(normalized_channel)
+        if method:
+            binary = "kilo" if tool == "kilocode" else "opencode"
+            return f"{binary} upgrade --method {method}"
+        return None
+    commands = {
+        "amp": "amp update",
+        "claude": "claude update",
+        "copilot": "copilot update",
+        "devin": "devin update",
+        "droid": "droid update",
+        "hermes": "hermes update",
+    }
+    return commands.get(tool)
+
+
+def upgrade_guidance(
+    record: dict[str, Any], normalized_channel: str, status: str, migration_command: str | None
+) -> dict[str, Any]:
+    tool = record["id"]
+    channel_command = channel_update_command(record, normalized_channel)
+    native_command = native_update_command(tool, normalized_channel)
+    alternatives: list[dict[str, str]] = []
+
+    if tool == "codex" and normalized_channel == "app-bundle":
+        return {
+            "title": "Update ChatGPT.app",
+            "kind": "app_bundle_update",
+            "command": None,
+            "reason": "This Codex binary is bundled with ChatGPT.app rather than a standalone CLI install.",
+            "channel_effect": "Keeps the app-bundled installation managed by ChatGPT.",
+            "alternatives": alternatives,
+        }
+
+    if status == "nonstandard" and migration_command:
+        return {
+            "title": "Migrate to the vendor-recommended channel",
+            "kind": "migration",
+            "command": migration_command,
+            "reason": "The current install channel is no longer a supported routine-upgrade path.",
+            "channel_effect": "Changes the installation channel.",
+            "alternatives": alternatives,
+        }
+
+    if tool in {"kilocode", "opencode"} and native_command:
+        return {
+            "title": f"Preserve {normalized_channel} ownership",
+            "kind": "native_channel_update",
+            "command": native_command,
+            "reason": "The CLI accepts an explicit installation method matching the detected channel.",
+            "channel_effect": "Preserves the detected installation method.",
+            "alternatives": alternatives,
+        }
+
+    if normalized_channel in {"npm", "brew", "brew-core", "brew-tap", "brew-cask"} and channel_command:
+        if native_command:
+            alternatives.append(
+                {
+                    "title": "Vendor native self-update",
+                    "command": native_command,
+                    "reason": "Available from the CLI, but its effect on package-manager ownership is not verified.",
+                    "channel_effect": "May replace the managed binary outside the current package manager.",
+                }
+            )
+        return {
+            "title": f"Preserve {normalized_channel} ownership",
+            "kind": "channel_update",
+            "command": channel_command,
+            "reason": "The current install is managed by this supported package channel.",
+            "channel_effect": "Preserves package-manager ownership.",
+            "alternatives": alternatives,
+        }
+
+    if tool == "codex" and normalized_channel == "script":
+        return {
+            "title": "Run the official standalone installer",
+            "kind": "official_installer",
+            "command": "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
+            "reason": "OpenAI documents the standalone installer as the update path for script installs.",
+            "channel_effect": "Refreshes the standalone CLI installation.",
+            "alternatives": alternatives,
+        }
+
+    if native_command:
+        return {
+            "title": "Run the vendor native self-update",
+            "kind": "native_self_update",
+            "command": native_command,
+            "reason": "The current installation is a vendor-managed direct or script path.",
+            "channel_effect": "Expected to update the direct install; package-manager ownership is not applicable.",
+            "alternatives": alternatives,
+        }
+
+    if channel_command:
+        return {
+            "title": "Upgrade through the current channel",
+            "kind": "channel_update",
+            "command": channel_command,
+            "reason": "This is the available routine upgrade path for the detected channel.",
+            "channel_effect": "Preserves the detected installation channel.",
+            "alternatives": alternatives,
+        }
+
+    return {
+        "title": "Review official installation guidance",
+        "kind": "manual_review",
+        "command": None,
+        "reason": "No safe routine upgrade command is verified for this installation.",
+        "channel_effect": "No command is proposed.",
+        "alternatives": alternatives,
+    }
+
+
+def get_update_command(record: dict[str, Any], normalized_channel: str) -> str:
+    guidance = upgrade_guidance(
+        record,
+        normalized_channel,
+        channel_status(record, normalized_channel),
+        None,
+    )
+    return guidance.get("command") or "See official install docs"
 
 
 def get_migration_command(record: dict[str, Any]) -> str | None:
@@ -585,12 +705,14 @@ def build_result(record: dict[str, Any], online: bool, with_release_notes: bool)
     if not notes and normalized_channel == "brew" and channel_notes.get("brew"):
         notes = channel_notes["brew"]
 
+    status = channel_status(record, normalized_channel)
     migration_target = None
     migration_command = None
-    if channel_status(record, normalized_channel) != "recommended":
+    if status != "recommended" and not (record["id"] == "codex" and normalized_channel == "app-bundle"):
         migration_target = get_migration_target(record)
         migration_command = get_migration_command(record)
 
+    guidance = upgrade_guidance(record, normalized_channel, status, migration_command)
     result = {
         "id": record["id"],
         "name": record["name"],
@@ -603,10 +725,11 @@ def build_result(record: dict[str, Any], online: bool, with_release_notes: bool)
         "version_raw": version_raw,
         "detected_channel": detected_channel,
         "normalized_channel": normalized_channel,
-        "channel_status": channel_status(record, normalized_channel),
+        "channel_status": status,
         "official_install_url": record["official_install_url"],
         "official_release_notes_url": record["official_release_notes_url"],
-        "update_command": get_update_command(record, normalized_channel),
+        "update_command": guidance.get("command") or "See official install docs",
+        "upgrade_guidance": guidance,
         "upgrade_candidate": False,
         "migration_target": migration_target,
         "migration_command": migration_command,

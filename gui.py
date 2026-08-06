@@ -233,6 +233,53 @@ def render_command_text(container: ui.column, command: str) -> None:
     ).classes("w-full")
 
 
+def upgrade_guidance_of(item: dict[str, Any]) -> dict[str, Any]:
+    guidance = item.get("upgrade_guidance")
+    if isinstance(guidance, dict):
+        return guidance
+    return {
+        "title": "Upgrade through the current channel",
+        "command": item.get("update_command"),
+        "reason": "Compatibility fallback for an older audit payload.",
+        "channel_effect": "Not available.",
+        "alternatives": [],
+    }
+
+
+def render_upgrade_guidance(container: ui.column, item: dict[str, Any]) -> None:
+    guidance = upgrade_guidance_of(item)
+    command = guidance.get("command")
+    ui.label("Recommended action").classes("font-semibold mt-2")
+    ui.label(guidance.get("title", "Upgrade")).classes("text-base font-medium")
+    ui.label(guidance.get("reason", "Not available.")).classes("text-sm text-gray-700")
+    ui.label(f"Channel effect: {guidance.get('channel_effect', 'Not available.')}").classes("text-sm text-gray-600")
+    if command:
+        ui.button(
+            "Copy recommended command",
+            on_click=lambda cmd=command: ui.run_javascript(f"navigator.clipboard.writeText({cmd!r})"),
+        )
+        render_command_text(container, command)
+    else:
+        ui.label("No executable command is proposed. Review the official installation guidance.").classes("text-sm text-amber-800")
+
+    alternatives = [entry for entry in guidance.get("alternatives", []) if isinstance(entry, dict)]
+    if alternatives:
+        with ui.expansion("Alternative paths", icon="alt_route").classes("w-full mt-2"):
+            ui.label("Alternatives are informational and are never selected by --apply.").classes("text-sm text-gray-600")
+            for alternative in alternatives:
+                with ui.card().classes("w-full p-3 mt-2"):
+                    ui.label(alternative.get("title", "Alternative")).classes("font-medium")
+                    ui.label(alternative.get("reason", "")).classes("text-sm text-gray-700")
+                    ui.label(f"Channel effect: {alternative.get('channel_effect', 'Not available.')}").classes("text-sm text-gray-600")
+                    alternative_command = alternative.get("command")
+                    if alternative_command:
+                        ui.button(
+                            "Copy alternative command",
+                            on_click=lambda cmd=alternative_command: ui.run_javascript(f"navigator.clipboard.writeText({cmd!r})"),
+                        )
+                        render_command_text(container, alternative_command)
+
+
 def refresh_summary(summary_container: ui.column, rows: list[dict[str, Any]]) -> None:
     summary_container.clear()
     summary = summarize_rows(filter_rows(rows))
@@ -312,14 +359,7 @@ def render_details(container: ui.column, row: dict[str, Any] | None) -> None:
             ui.label("Highlights").classes("font-semibold mt-2")
             for highlight in summary["highlights"][:2]:
                 ui.markdown(f"- {highlight}")
-        ui.label("Commands").classes("font-semibold mt-2")
-        with ui.row().classes("gap-3 flex-wrap"):
-            ui.button("Copy upgrade", on_click=lambda cmd=item.get("update_command", ""): ui.run_javascript(f"navigator.clipboard.writeText({cmd!r})"))
-            if item.get("migration_command"):
-                ui.button("Copy migration", on_click=lambda cmd=item["migration_command"]: ui.run_javascript(f"navigator.clipboard.writeText({cmd!r})"))
-        render_command_text(container, item.get("update_command", ""))
-        if item.get("migration_command"):
-            render_command_text(container, item["migration_command"])
+        render_upgrade_guidance(container, item)
 
 
 def render_audit_warnings(container: ui.column, errors: list[dict[str, str]]) -> None:
@@ -484,7 +524,7 @@ async def run_audit(
 def render_plan_summary(container: ui.column, plan_rows: list[dict[str, Any]]) -> None:
     container.clear()
     with container:
-        ui.label("Upgrade plans appear only after `Run Upgrade Plan`, and only for entries that are both outdated and on a recommended or supported channel.").classes("text-sm text-gray-600")
+        ui.label("Upgrade plans appear only after `Run Upgrade Plan`, and only for entries that are both outdated and on a recommended or supported channel. Nonstandard installs show migration guidance in Details instead.").classes("text-sm text-gray-600")
         if not plan_rows:
             ui.label("No upgrade candidates for the current filters. Selecting a table row alone does not populate this panel.").classes("text-gray-600")
             return
@@ -503,7 +543,7 @@ def render_plan_summary(container: ui.column, plan_rows: list[dict[str, Any]]) -
                     ui.label(f"risk terms: {', '.join(risk_terms[:5])}").classes("text-xs text-gray-600")
                 for highlight in summary.get("highlights", [])[:2]:
                     ui.markdown(f"- {highlight}")
-                render_command_text(container, item.get("update_command", ""))
+                render_upgrade_guidance(container, item)
 
 
 async def run_plan(activity_col: ui.log, status_label: ui.label, spinner: ui.spinner, plan_container: ui.column) -> None:

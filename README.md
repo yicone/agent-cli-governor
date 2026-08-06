@@ -121,7 +121,9 @@ The audit output distinguishes:
 - `channel_status`
   `recommended`, `supported`, or `nonstandard`
 - `update_command`
-  The conservative in-channel upgrade path
+  The one executable command selected as the safe default for `--apply`
+- `upgrade_guidance`
+  Structured primary-action title, rationale, installation-channel effect, and optional informational alternatives. Alternatives are never executed by `--apply`.
 - `migration_command`
   A suggested migration path when the current install channel is no longer preferred
 - `release_risk`
@@ -134,10 +136,11 @@ The audit output distinguishes:
 - `--only-nonstandard` narrows the report to tools whose install channel does not match the vendor's supported or recommended channels.
 - `--only-class` lets you separate true Agent CLIs from adjacent tooling/runtime dependencies such as `uv`.
 - `--with-release-notes` fetches the latest release notes where possible and produces a simple risk summary. GitHub Releases are supported directly, and a few vendor-hosted changelog pages are summarized heuristically.
-- Some CLIs expose their own supported self-update flow. For example, `codex` uses `codex update`, and `hermes` uses `hermes update` when the current install channel is still supported for routine upgrades.
+- A native self-update command is not automatically preferred over npm or Homebrew. When a CLI can explicitly preserve its install method, such as Kilo Code and OpenCode with `--method`, the plan uses that native command. When ownership effects are unverified, the plan preserves the current npm/Homebrew channel and presents native self-update only as an informational alternative.
+- Claude Code uses `claude update`; its installer may migrate installation types, so it is not the default for Homebrew-managed installs. Codex script installs use the official standalone installer, while app-bundled Codex is updated with ChatGPT.app.
 - The tool catalog lives in `agent_cli_catalog.json`.
 - Most entries are `agent-cli`. A small number of adjacent tools can be retained as `tooling-runtime` when they matter to the same upgrade/governance workflow.
-- The audit output separates `update_command` from `migration_command`. Use the first for in-channel upgrades, and the second when the current install method should be replaced with the vendor-recommended one.
+- The audit output separates the selected `update_command` from `migration_command`. `upgrade_guidance` explains which action is selected, how it affects installation ownership, and when an alternative is only for review or troubleshooting.
 - `agent_cli_upgrade.py` only upgrades entries that are both outdated and on a recognized supported or recommended channel.
 - `agent_cli_upgrade.py --offline` reuses offline audit mode for faster but less complete upgrade planning.
 - `agent_cli_upgrade.py --channel recommended` narrows the plan to vendor-recommended install channels only.

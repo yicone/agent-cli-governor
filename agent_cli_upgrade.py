@@ -60,6 +60,18 @@ def release_risk_of(item: dict[str, Any]) -> str:
     return summary.get("risk_level", "unknown")
 
 
+def upgrade_guidance_of(item: dict[str, Any]) -> dict[str, Any]:
+    guidance = item.get("upgrade_guidance")
+    if isinstance(guidance, dict):
+        return guidance
+    return {
+        "title": "Upgrade through the current channel",
+        "reason": "Compatibility fallback for an older audit payload.",
+        "channel_effect": "Not available.",
+        "alternatives": [],
+    }
+
+
 def channel_matches(item: dict, channel: str) -> bool:
     status = item.get("channel_status")
     if channel == "all":
@@ -116,10 +128,18 @@ def main() -> int:
     print("Upgrade plan:")
     for item in plan:
         risk = release_risk_of(item)
+        guidance = upgrade_guidance_of(item)
         print(
             f"- {item['id']}: {item['current_version']} -> {item['latest_version']} "
-            f"[class={item.get('tooling_class', 'agent-cli')}, {item['channel_status']}, risk={risk}] via {item['update_command']}"
+            f"[class={item.get('tooling_class', 'agent-cli')}, {item['channel_status']}, risk={risk}]"
         )
+        print(f"  recommended action: {guidance.get('title', 'Upgrade')}")
+        print(f"  command: {item['update_command']}")
+        print(f"  why: {guidance.get('reason', 'Not available.')}")
+        print(f"  channel effect: {guidance.get('channel_effect', 'Not available.')}")
+        for alternative in guidance.get("alternatives", []):
+            if isinstance(alternative, dict):
+                print(f"  alternative ({alternative.get('title', 'Alternative')}): {alternative.get('command', '')}")
 
     if not args.apply:
         print()

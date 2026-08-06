@@ -12,8 +12,9 @@ The format is intentionally simple and human-maintained.
 
 ### Changed
 
-- `codex` routine upgrade commands now use the built-in `codex update` flow
-- `hermes` routine upgrade commands use the built-in `hermes update` flow
+- Upgrade plans now show one channel-aware primary action with its rationale and installation-channel effect; alternatives are informational and never run by `--apply`
+- npm/Homebrew installs now keep package-manager ownership when native self-update behavior is unverified; Kilo Code and OpenCode use explicit `--method` arguments to preserve their detected method
+- Claude Code now uses `claude update`, while an app-bundled Codex CLI directs users to update ChatGPT.app instead of proposing a standalone CLI command
 - README scope and notes now document Hermes support and self-update behavior
 
 ## 2026-06-22
