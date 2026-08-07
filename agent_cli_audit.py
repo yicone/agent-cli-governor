@@ -5,7 +5,9 @@ import argparse
 import concurrent.futures
 import json
 import os
+import platform
 import re
+import signal
 import shutil
 import subprocess
 import sys
@@ -74,14 +76,40 @@ def run(
             merged_env.setdefault(name, value)
     if env:
         merged_env.update(env)
-    return subprocess.run(
+    process = subprocess.Popen(
         args,
         text=True,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         env=merged_env,
-        timeout=timeout,
-        check=check,
+        start_new_session=True,
     )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
+            stdout, stderr = process.communicate(timeout=3)
+        except subprocess.TimeoutExpired:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            stdout, stderr = process.communicate()
+        raise subprocess.TimeoutExpired(args, timeout, output=stdout, stderr=stderr)
+
+    completed = subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
+    if check and completed.returncode != 0:
+        raise subprocess.CalledProcessError(
+            completed.returncode,
+            args,
+            output=stdout,
+            stderr=stderr,
+        )
+    return completed
 
 
 def system_proxy_env() -> dict[str, str]:
@@ -146,6 +174,13 @@ def detect_channel(path: str, resolved_path: str) -> str:
     if "/.local/bin/" in path and "/.local/share/" in resolved_path:
         return "script"
     return "unknown"
+
+
+def binary_container(path: str, resolved_path: str) -> str:
+    joined = " ".join([path, resolved_path])
+    if "/Applications/" in joined and ".app/" in joined:
+        return "app-bundle"
+    return "standalone"
 
 
 def classify_brew_channel(brew_info: dict[str, Any] | None) -> str:
@@ -319,10 +354,33 @@ def get_nested_field(payload: dict[str, Any], field: str) -> Any:
     return current
 
 
+def release_platform() -> str | None:
+    system = platform.system().lower()
+    machine = platform.machine().lower()
+    arch_map = {
+        "arm64": "arm64",
+        "aarch64": "arm64",
+        "x86_64": "amd64",
+        "amd64": "amd64",
+    }
+    arch = arch_map.get(machine)
+    if system not in {"darwin", "linux"} or not arch:
+        return None
+    return f"{system}_{arch}"
+
+
 def get_latest_from_source(source: dict[str, Any], warnings: list[str] | None = None) -> str | None:
     source = safe_dict(source)
     source_type = source.get("type")
     url = source.get("url")
+    url_template = source.get("url_template")
+    if url_template:
+        target = release_platform()
+        if not target:
+            if warnings is not None:
+                warnings.append("Could not determine a supported platform for the latest-version source")
+            return None
+        url = str(url_template).format(platform=target)
     if not source_type or not url:
         return None
     if source_type == "text":
@@ -560,6 +618,16 @@ def upgrade_guidance(
             "alternatives": alternatives,
         }
 
+    if tool == "antigravity" and normalized_channel == "script":
+        return {
+            "title": "Allow Antigravity's background self-updater to run",
+            "kind": "background_self_update",
+            "command": None,
+            "reason": "The official installer delegates routine updates to the CLI's background self-updater during normal runs.",
+            "channel_effect": "Preserves the official script installation.",
+            "alternatives": alternatives,
+        }
+
     if status == "nonstandard" and migration_command:
         return {
             "title": "Migrate to the vendor-recommended channel",
@@ -716,6 +784,7 @@ def build_result(record: dict[str, Any], online: bool, with_release_notes: bool)
     command, path = installed
     resolved = resolve_path(path)
     detected_channel = detect_channel(path, resolved)
+    container = binary_container(path, resolved)
     if detected_channel == "unknown" and path.startswith(str(Path.home() / ".local/bin")):
         detected_channel = "script"
 
@@ -780,6 +849,7 @@ def build_result(record: dict[str, Any], online: bool, with_release_notes: bool)
         "version_raw": version_raw,
         "detected_channel": detected_channel,
         "normalized_channel": normalized_channel,
+        "binary_container": container,
         "channel_status": status,
         "official_install_url": record["official_install_url"],
         "official_release_notes_url": record["official_release_notes_url"],

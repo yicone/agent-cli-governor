@@ -1,12 +1,36 @@
 {
   "tools": [
     {
+      "id": "antigravity",
+      "name": "Google Antigravity CLI",
+      "tooling_class": "agent-cli",
+      "commands": ["agy"],
+      "version_args": [["--version"]],
+      "latest_source": {
+        "type": "json",
+        "url_template": "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/{platform}.json",
+        "field": "version"
+      },
+      "official_install_url": "https://antigravity.google/docs/cli/install",
+      "official_release_notes_url": "https://antigravity.google/docs/cli/overview",
+      "recommended_channels": ["script"],
+      "supported_channels": ["script"],
+      "channel_notes": {
+        "script": "Google documents the native installer and the CLI's background self-updater for routine updates."
+      }
+    },
+    {
       "id": "codex",
       "name": "OpenAI Codex CLI",
       "tooling_class": "agent-cli",
       "commands": ["codex"],
       "version_args": [["--version"], ["version"]],
       "npm_package": "@openai/codex",
+      "latest_source": {
+        "type": "regex",
+        "url": "https://api.github.com/repos/openai/codex/releases/latest",
+        "pattern": "\\\"tag_name\\\"\\s*:\\s*\\\"rust-v([^\\\"]+)\\\""
+      },
       "official_install_url": "https://developers.openai.com/codex/cli",
       "official_release_notes_url": "https://github.com/openai/codex/releases",
       "recommended_channels": ["script"],

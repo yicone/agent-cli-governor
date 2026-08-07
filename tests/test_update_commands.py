@@ -1,7 +1,21 @@
+import os
+import subprocess
+import sys
+import time
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
-from agent_cli_audit import get_update_command, system_proxy_env, upgrade_guidance
+from agent_cli_audit import (
+    binary_container,
+    detect_channel,
+    get_latest_from_source,
+    get_update_command,
+    release_platform,
+    run,
+    system_proxy_env,
+    upgrade_guidance,
+)
 
 
 class UpgradeGuidanceTests(unittest.TestCase):
@@ -32,6 +46,16 @@ class UpgradeGuidanceTests(unittest.TestCase):
 
         self.assertEqual(guidance["kind"], "official_installer")
         self.assertIn("chatgpt.com/codex/install.sh", guidance["command"])
+
+    def test_parses_codex_standalone_latest_from_official_release_tag(self) -> None:
+        source = {
+            "type": "regex",
+            "url": "https://api.github.com/repos/openai/codex/releases/latest",
+            "pattern": r'"tag_name"\s*:\s*"rust-v([^"]+)"',
+        }
+
+        with patch("agent_cli_audit.http_get_text", return_value='{"tag_name":"rust-v0.147.0"}'):
+            self.assertEqual(get_latest_from_source(source), "0.147.0")
 
     def test_requires_manual_review_for_codex_app_bundle(self) -> None:
         guidance = upgrade_guidance(
@@ -70,6 +94,52 @@ class UpgradeGuidanceTests(unittest.TestCase):
                     "https_proxy": "http://127.0.0.1:7890",
                 },
             )
+
+    def test_kiro_script_shim_is_distinct_from_its_app_bundle_container(self) -> None:
+        path = str(Path.home() / ".local/bin/kiro-cli")
+        resolved = "/Applications/Kiro CLI.app/Contents/MacOS/kiro-cli"
+
+        self.assertEqual(detect_channel(path, resolved), "script")
+        self.assertEqual(binary_container(path, resolved), "app-bundle")
+
+    def test_chatgpt_bundled_codex_is_an_app_bundle_install(self) -> None:
+        path = "/Applications/ChatGPT.app/Contents/Resources/codex"
+
+        self.assertEqual(detect_channel(path, path), "app-bundle")
+        self.assertEqual(binary_container(path, path), "app-bundle")
+
+    def test_antigravity_uses_background_self_update_guidance(self) -> None:
+        guidance = upgrade_guidance({"id": "antigravity"}, "script", "recommended", None)
+
+        self.assertEqual(guidance["kind"], "background_self_update")
+        self.assertIsNone(guidance["command"])
+
+    def test_release_platform_matches_antigravity_manifest_names(self) -> None:
+        with patch("agent_cli_audit.platform.system", return_value="Darwin"), patch(
+            "agent_cli_audit.platform.machine", return_value="arm64"
+        ):
+            self.assertEqual(release_platform(), "darwin_arm64")
+
+    def test_timed_out_command_does_not_leave_its_child_running(self) -> None:
+        script = (
+            "import subprocess, sys, time; "
+            "child = subprocess.Popen(['sleep', '60']); "
+            "print(child.pid, flush=True); "
+            "time.sleep(60)"
+        )
+
+        with self.assertRaises(subprocess.TimeoutExpired) as raised:
+            run([sys.executable, "-c", script], timeout=0.2)
+
+        child_pid = int((raised.exception.output or "").strip())
+        for _ in range(20):
+            try:
+                os.kill(child_pid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        else:
+            self.fail("timed-out command left its child process running")
 
 
 if __name__ == "__main__":
