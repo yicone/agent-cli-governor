@@ -9,6 +9,7 @@ The format is intentionally simple and human-maintained.
 ### Added
 
 - Support for `Hermes CLI` in the local audit and upgrade catalog
+- Support for Google Antigravity CLI (`agy`), including platform-specific official manifest checks and background self-update guidance
 
 ### Changed
 
@@ -19,6 +20,11 @@ The format is intentionally simple and human-maintained.
 - GUI timeouts now stop their child process groups, preventing timed-out audits from continuing in the background and causing later requests to contend
 - Online audits now probe up to four CLIs concurrently, bound HTTP/package-manager lookups, and report unreachable version sources as audit warnings instead of consuming the whole GUI timeout
 - npm and Homebrew version lookups now inherit the proxy resolved from macOS system settings when no explicit proxy environment is set
+- Codex standalone installs now compare against the official GitHub release tag instead of relying on npm registry metadata
+- Audit results now distinguish install channel from binary container, so script-installed shims that resolve into app bundles do not appear as channel drift
+- GUI plan scope, results filters, and release-note loading now have separate contexts: plan scope only affects plan generation, table filters do not alter audit summaries, and release notes load from the selected CLI's Details panel
+- Timed-out local probe commands now terminate their entire process groups, preventing launcher processes from leaving native children behind
+- The GUI now accepts `--port` so it can run when the default `8080` is occupied
 - README scope and notes now document Hermes support and self-update behavior
 
 ## 2026-06-22

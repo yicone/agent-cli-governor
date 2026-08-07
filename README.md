@@ -29,6 +29,7 @@ The main focus is `agent-cli` tools such as:
 - Kiro CLI
 - Devin CLI
 - Hermes CLI
+- Google Antigravity CLI (`agy`)
 - Copilot CLI
 - OpenCode
 - Multica
@@ -99,11 +100,15 @@ The GUI is intentionally a thin shell over the existing CLI tools:
 - `Overview` explains the upgrade model and shows static example data
 - `Console` runs a local audit and generates a dry-run upgrade plan; it never executes upgrades
 - `Generate Upgrade Plan` reuses the latest matching audit result when possible, avoiding a second full network audit
-- `Load Release Notes` fetches notes only for the selected row, so changelog retrieval does not block the main audit
+- The selected CLI's `Details` panel can load release notes on demand, so changelog retrieval does not block the main audit
+- `Plan scope` controls generated upgrade plans; `Installation status` and `Only outdated` are results-table filters, while the summary cards remain an unfiltered audit baseline
 - online audit probes up to four CLIs concurrently; individual HTTP and package-manager lookups are bounded and failures appear under `Audit Warnings`
+- local version and package-manager probes run in isolated process groups, so a timed-out launcher cannot leave a native child process behind
 - Python HTTP lookups use the default `urllib` proxy resolution: `HTTP_PROXY`/`HTTPS_PROXY` take precedence, with macOS system proxy settings used when those variables are absent; that resolved proxy is also passed to `npm` and Homebrew lookups
 - long-running subprocesses have a bounded timeout and are stopped on timeout rather than left running in the background
 - the first version does not execute real upgrades
+
+Run it with `python3 gui.py`. If port `8080` is already in use, choose another port, for example `python3 gui.py --port 8081`.
 
 ### GUI Screenshot: Overview
 
@@ -121,6 +126,8 @@ The audit output distinguishes:
   `agent-cli` versus `tooling-runtime`
 - `normalized_channel`
   For example `script`, `npm`, `brew-core`, `brew-cask`, `desktop-install`
+- `binary_container`
+  The resolved executable's physical form, currently `standalone` or `app-bundle`. This is distinct from install channel: an official script can install a shim in `~/.local/bin` that resolves to an app bundle.
 - `channel_status`
   `recommended`, `supported`, or `nonstandard`
 - `update_command`
@@ -141,6 +148,7 @@ The audit output distinguishes:
 - `--with-release-notes` fetches the latest release notes where possible and produces a simple risk summary. GitHub Releases are supported directly, and a few vendor-hosted changelog pages are summarized heuristically.
 - A native self-update command is not automatically preferred over npm or Homebrew. When a CLI can explicitly preserve its install method, such as Kilo Code and OpenCode with `--method`, the plan uses that native command. When ownership effects are unverified, the plan preserves the current npm/Homebrew channel and presents native self-update only as an informational alternative.
 - Claude Code uses `claude update`; its installer may migrate installation types, so it is not the default for Homebrew-managed installs. Codex script installs use the official standalone installer, while app-bundled Codex is updated with ChatGPT.app.
+- Antigravity CLI uses Google's native installer at `~/.local/bin/agy` and runs its verified self-updater in the background during normal CLI use. The audit reports its official manifest version but does not treat interactive `agy` startup as an automatic `--apply` action.
 - The tool catalog lives in `agent_cli_catalog.json`.
 - Most entries are `agent-cli`. A small number of adjacent tools can be retained as `tooling-runtime` when they matter to the same upgrade/governance workflow.
 - The audit output separates the selected `update_command` from `migration_command`. `upgrade_guidance` explains which action is selected, how it affects installation ownership, and when an alternative is only for review or troubleshooting.

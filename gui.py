@@ -32,6 +32,7 @@ class CommandTimeoutError(RuntimeError):
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="NiceGUI shell for agent-cli-governor")
     parser.add_argument("--reload", action="store_true", help="Enable NiceGUI hot reload for local GUI development")
+    parser.add_argument("--port", type=int, default=8080, help="HTTP port to listen on (default: 8080)")
     return parser.parse_args()
 
 
@@ -201,10 +202,6 @@ def build_plan_command() -> list[str]:
 
 def filter_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     filtered = [row_dict(row) for row in rows if isinstance(row, dict)]
-    if state.current_channel == "recommended":
-        filtered = [row for row in filtered if row.get("channel_status") == "recommended"]
-    elif state.current_channel == "supported":
-        filtered = [row for row in filtered if row.get("channel_status") in {"recommended", "supported"}]
     if state.status_filter != "all":
         filtered = [row for row in filtered if row.get("channel_status") == state.status_filter]
     if state.only_outdated:
@@ -313,7 +310,7 @@ def render_upgrade_guidance(container: ui.column, item: dict[str, Any]) -> None:
 
 def refresh_summary(summary_container: ui.column, rows: list[dict[str, Any]]) -> None:
     summary_container.clear()
-    summary = summarize_rows(filter_rows(rows))
+    summary = summarize_rows(rows)
     with summary_container:
         with ui.column().classes("w-full gap-2"):
             ui.label("Version Status").classes("text-sm font-semibold text-gray-700")
@@ -342,11 +339,10 @@ def refresh_summary(summary_container: ui.column, rows: list[dict[str, Any]]) ->
 
 def refresh_status_strip(container: ui.column, rows: list[dict[str, Any]]) -> None:
     container.clear()
-    filtered_rows = filter_rows(rows)
-    summary = summarize_rows(filtered_rows)
+    summary = summarize_rows(rows)
     items = [
-        ("Recommended upgrades", sum(1 for row in filtered_rows if row.get("channel_status") == "recommended" and is_outdated(row)), "Routine in-channel upgrades on vendor-preferred paths.", "bg-green-600 text-white"),
-        ("Supported review", sum(1 for row in filtered_rows if row.get("channel_status") == "supported"), "Working installs on allowed but less preferred channels.", "bg-amber-500 text-white"),
+        ("Recommended upgrades", sum(1 for row in rows if row.get("channel_status") == "recommended" and is_outdated(row)), "Routine in-channel upgrades on vendor-preferred paths.", "bg-green-600 text-white"),
+        ("Supported review", sum(1 for row in rows if row.get("channel_status") == "supported"), "Working installs on allowed but less preferred channels.", "bg-amber-500 text-white"),
         ("Nonstandard review", summary["nonstandard"], "Manual review or migration is likely safer than routine upgrade.", "bg-red-600 text-white"),
     ]
     with container:
@@ -372,7 +368,10 @@ def render_details(container: ui.column, row: dict[str, Any] | None) -> None:
         ui.label(f"current: {item.get('current_version', 'unknown')}")
         ui.label(f"latest: {item.get('latest_version', 'unknown')}")
         ui.html(version_badge_html(version_state_of(item)))
-        ui.label(f"channel: {item.get('normalized_channel', 'unknown')}")
+        ui.label(f"install channel: {item.get('normalized_channel', 'unknown')}")
+        ui.label(f"binary container: {item.get('binary_container', 'unknown')}")
+        ui.label(f"entry path: {item.get('path', 'unknown')}").classes("text-sm break-all")
+        ui.label(f"resolved binary: {item.get('resolved_path', 'unknown')}").classes("text-sm break-all")
         ui.html(f"<span class='{badge_classes(item.get('channel_status', 'unknown'))}'>{item.get('channel_status', 'unknown')}</span>")
         ui.label("release risk").classes("text-sm text-gray-600")
         ui.html(risk_badge_html(risk_of(item)))
@@ -390,6 +389,12 @@ def render_details(container: ui.column, row: dict[str, Any] | None) -> None:
             ui.label("Highlights").classes("font-semibold mt-2")
             for highlight in summary["highlights"][:2]:
                 ui.markdown(f"- {highlight}")
+        if "details_release_notes_handler" in globals():
+            ui.button(
+                f"Load release notes for {item.get('id', 'selected CLI')}",
+                on_click=details_release_notes_handler,
+            ).props("outline")
+            ui.label("Loads changelog evidence only for this selected CLI.").classes("text-xs text-gray-600")
         render_upgrade_guidance(container, item)
 
 
@@ -414,6 +419,7 @@ def render_audit_warnings(container: ui.column, errors: list[dict[str, str]]) ->
 
 def render_table(container: ui.column, rows: list[dict[str, Any]], details: ui.column) -> None:
     container.clear()
+    total_rows = len(rows)
     rows = filter_rows(rows)
     table_rows = []
     for row in rows:
@@ -429,6 +435,7 @@ def render_table(container: ui.column, rows: list[dict[str, Any]], details: ui.c
             }
         )
     with container:
+        ui.label(f"Showing {len(table_rows)} of {total_rows} audit result(s)").classes("text-sm text-gray-600 mb-1")
         table = ui.aggrid(
             {
                 "defaultColDef": {"resizable": True, "sortable": True, "filter": True},
@@ -454,7 +461,12 @@ def render_table(container: ui.column, rows: list[dict[str, Any]], details: ui.c
                         }
                         """,
                     },
-                    {"field": "normalized_channel", "headerName": "Channel"},
+                    {
+                        "field": "normalized_channel",
+                        "headerName": "Install Channel",
+                        ":tooltipValueGetter": "params => `Entry: ${params.data.path || 'unknown'}\\nResolved: ${params.data.resolved_path || 'unknown'}`",
+                    },
+                    {"field": "binary_container", "headerName": "Binary Container"},
                     {"field": "channel_status", "headerName": "Status"},
                     {
                         "field": "risk",
@@ -722,12 +734,22 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
             with ui.card().classes("w-full p-4"):
                 with ui.row().classes("items-center gap-3 w-full flex-wrap"):
                     class_select = ui.select(["agent-cli", "tooling-runtime"], value="agent-cli", label="Class")
-                    channel_select = ui.select(["recommended", "supported", "all"], value="recommended", label="Channel")
+                    plan_scope = ui.select(["recommended", "supported", "all"], value="recommended", label="Plan scope")
                     offline = ui.switch("Offline", value=False)
-                    ui.label("Release notes load on demand after selecting a row.").classes("text-sm text-gray-600")
+                    ui.label("Plan scope affects generated upgrade plans only.").classes("text-sm text-gray-600")
 
                     summary_row = ui.column().classes("w-full gap-2 mt-4")
                     status_strip = ui.column().classes("w-full gap-2 mt-2")
+
+                    with ui.row().classes("w-full items-end gap-4 mt-3"):
+                        ui.label("Results filters").classes("text-sm font-semibold text-gray-700 mb-2")
+                        status_select = ui.select(
+                            ["all", "recommended", "supported", "nonstandard"],
+                            value="all",
+                            label="Installation status",
+                        ).classes("min-w-[220px]")
+                        outdated_only = ui.switch("Only outdated", value=False)
+
                     table_col = ui.column().classes("w-full")
                     activity_log = ui.log().classes("w-full h-32")
                     status_label = ui.label("Idle").classes("text-sm text-gray-600 mt-2")
@@ -736,7 +758,7 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
 
                     def sync_state() -> None:
                         state.current_class = class_select.value
-                        state.current_channel = channel_select.value
+                        state.current_channel = plan_scope.value
                         state.offline = bool(offline.value)
 
                     def refresh_current_table() -> None:
@@ -755,28 +777,23 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
                             sync_state()
                             await run_plan(activity_log, status_label, spinner, plan_content)
 
-                        async def handle_release_notes() -> None:
+                        async def details_release_notes_handler() -> None:
                             sync_state()
                             await run_release_notes(table_col, details_content, activity_log, status_label, spinner)
 
+                        globals()["details_release_notes_handler"] = details_release_notes_handler
                         ui.button("Run Audit", on_click=handle_audit)
                         ui.button("Generate Upgrade Plan", on_click=handle_plan)
-                        ui.button("Load Release Notes", on_click=handle_release_notes).props("outline")
                         ui.button("Refresh", on_click=handle_audit)
                         ui.button("Copy Summary", on_click=lambda: ui.run_javascript(f"navigator.clipboard.writeText({json.dumps({'audit': state.audit_command, 'plan': state.plan_command})!r})"))
 
-                    with ui.row().classes("gap-6 mt-3 items-end w-full justify-between"):
-                        with ui.row().classes("gap-4 items-end"):
-                            status_select = ui.select(["all", "recommended", "supported", "nonstandard"], value="all", label="Status Filter").classes("min-w-[220px]")
-                            outdated_only = ui.switch("Only outdated", value=False)
+                    def sync_filters() -> None:
+                        state.status_filter = status_select.value
+                        state.only_outdated = bool(outdated_only.value)
+                        refresh_current_table()
 
-                        def sync_filters() -> None:
-                            state.status_filter = status_select.value
-                            state.only_outdated = bool(outdated_only.value)
-                            refresh_current_table()
-
-                        status_select.on("update:model-value", lambda _: sync_filters())
-                        outdated_only.on("update:model-value", lambda _: sync_filters())
+                    status_select.on("update:model-value", lambda _: sync_filters())
+                    outdated_only.on("update:model-value", lambda _: sync_filters())
 
             with ui.row().classes("w-full gap-4 items-start"):
                 with ui.column().classes("flex-1 gap-4"):
@@ -794,7 +811,7 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
                             audit_code.value = state.audit_command
                             plan_code.value = state.plan_command
 
-                        for widget in [class_select, channel_select, offline]:
+                        for widget in [class_select, plan_scope, offline]:
                             widget.on("update:model-value", lambda _: refresh_commands())
                         refresh_commands()
 
@@ -816,9 +833,10 @@ if __name__ in {"__main__", "__mp_main__"}:
     args = parse_args()
     reload_mode = args.reload
     print(f"Hot reload: {'enabled' if reload_mode else 'disabled'}")
+    print(f"Listening on port: {args.port}")
     if not reload_mode:
         print("Hint: run `python3 gui.py --reload` for local GUI hot reload.")
     try:
-        ui.run(title="agent-cli-governor", reload=reload_mode)
+        ui.run(title="agent-cli-governor", reload=reload_mode, port=args.port)
     except KeyboardInterrupt:
         pass
