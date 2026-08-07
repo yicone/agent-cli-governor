@@ -1,5 +1,7 @@
 # agent-cli-governor
 
+[English](./README.md) | [简体中文](./README.zh-CN.md)
+
 Audit and govern locally installed agent CLIs and adjacent runtime tooling.
 
 `agent-cli-governor` is a small local-ops repository for three related problems:
