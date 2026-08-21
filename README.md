@@ -44,13 +44,13 @@ The main focus is `agent-cli` tools such as:
 - Kilo Code
 - Cline
 
-Agent-operations entries currently include Multica, Claude Code Router (`ccr`), Orca, and CodexBar (`codexbar`).
+Agent-operations entries currently include Multica, Claude Code Router (`ccr`), 9Router, Nowledge Mem CLI (`nmem`), Orca, and CodexBar (`codexbar`).
 
 The catalog has three intentionally narrow classes:
 
 - `agent-cli`: a CLI that directly accepts and runs a coding-agent task, such as Codex, Claude Code, Jules, or Gemini.
-- `tooling-runtime`: protocol adapters and execution dependencies, such as ACPX, Codex ACP, Agent Browser, OpenSpec, 9Router, `nmem`, and `uv`.
-- `agent-operations`: a user-facing product that coordinates agents, routes model traffic, manages workspaces, or reports usage, such as Multica, Claude Code Router, Orca, and CodexBar.
+- `tooling-runtime`: protocol adapters and execution dependencies, such as ACPX, Codex ACP, Agent Browser, OpenSpec, and `uv`.
+- `agent-operations`: a user-facing product that coordinates agents, routes model traffic, manages workspaces, knowledge, or usage, such as Multica, Claude Code Router, 9Router, Nowledge Mem CLI, Orca, and CodexBar.
 
 The distinction prevents orchestration products from being mislabeled as either an Agent provider or a runtime dependency.
 
@@ -123,7 +123,9 @@ The GUI is intentionally a thin shell over the existing CLI tools:
 - `Generate Upgrade Plan` reuses the latest matching audit result when possible, avoiding a second full network audit
 - The selected CLI's `Details` panel can load release notes on demand, so changelog retrieval does not block the main audit
 - `Plan scope` controls generated upgrade plans; `Installation status` and `Only outdated` are results-table filters, while the summary cards remain an unfiltered audit baseline
+- `Run Audit` reuses a matching in-memory audit for up to 10 minutes; the adjacent `Force refresh` button always bypasses that cache. The cache is per GUI process and is never written to disk.
 - online audit probes up to four CLIs concurrently; individual HTTP and package-manager lookups are bounded and failures appear under `Audit Warnings`
+- class selection happens before probes begin, so one class cannot create warnings or network work for another; JSON output includes a catalog revision and selected-entry count for diagnostics
 - local version and package-manager probes run in isolated process groups, so a timed-out launcher cannot leave a native child process behind
 - Python HTTP lookups use the default `urllib` proxy resolution: `HTTP_PROXY`/`HTTPS_PROXY` take precedence, with macOS system proxy settings used when those variables are absent; that resolved proxy is also passed to `npm` and Homebrew lookups
 - long-running subprocesses have a bounded timeout and are stopped on timeout rather than left running in the background

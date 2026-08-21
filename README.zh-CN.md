@@ -44,13 +44,13 @@
 - Kilo Code
 - Cline
 
-当前 `agent-operations` 条目包括 Multica、Claude Code Router（`ccr`）、Orca 和 CodexBar（`codexbar`）。
+当前 `agent-operations` 条目包括 Multica、Claude Code Router（`ccr`）、9Router、Nowledge Mem CLI（`nmem`）、Orca 和 CodexBar（`codexbar`）。
 
 目录采用三个边界清晰的分类：
 
 - `agent-cli`：直接接受并执行编码 Agent 任务的 CLI，例如 Codex、Claude Code、Jules、Gemini。
-- `tooling-runtime`：协议适配器与执行支撑依赖，例如 ACPX、Codex ACP、Agent Browser、OpenSpec、9Router、`nmem`、`uv`。
-- `agent-operations`：编排多个 Agent、路由模型请求、管理工作区或展示用量的面向用户产品，例如 Multica、Claude Code Router、Orca、CodexBar。
+- `tooling-runtime`：协议适配器与执行支撑依赖，例如 ACPX、Codex ACP、Agent Browser、OpenSpec、`uv`。
+- `agent-operations`：编排多个 Agent、路由模型请求、管理工作区、知识或用量的面向用户产品，例如 Multica、Claude Code Router、9Router、Nowledge Mem CLI、Orca、CodexBar。
 
 这样可以避免把编排产品错误地称为 Agent Provider 或 runtime 依赖。
 
@@ -121,7 +121,9 @@ GUI 有意保持为既有 CLI 工具上的薄壳：
 - `Generate Upgrade Plan` 会在可能时复用最近一次匹配的审计结果，避免第二次完整网络审计
 - 选定 CLI 的 `Details` 面板可按需加载发布说明，避免 changelog 获取阻塞主审计
 - `Plan scope` 仅控制生成的升级计划；`Installation status` 和 `Only outdated` 是结果表过滤器，统计卡片仍以未过滤审计结果为基线
+- `Run Audit` 会复用 10 分钟内参数完全相同的内存审计结果；紧邻它的 `Force refresh` 始终绕过缓存并重新审计。缓存仅存在于 GUI 进程内存中，绝不写入磁盘。
 - 在线审计最多并发探测四个 CLI；单次 HTTP 与包管理器查询均受限，失败会显示在 `Audit Warnings` 中
+- Class 会在探测开始前过滤目录，因此一个 Class 不会为另一个 Class 产生网络请求或 warnings；JSON 输出还包含 catalog 指纹与已选条目数，便于诊断实际加载的目录版本
 - 本地版本和包管理器探测在隔离进程组中运行，超时的启动器不会遗留本机子进程
 - Python HTTP 查询采用默认 `urllib` 代理解析：`HTTP_PROXY`/`HTTPS_PROXY` 优先；未设置时使用 macOS 系统代理，并将解析后的代理传递给 `npm` 和 Homebrew 查询
 - 长时间运行的子进程有明确超时，并会被终止而非留在后台

@@ -8,6 +8,7 @@ import os
 import re
 import signal
 import subprocess
+import time
 import traceback
 from pathlib import Path
 from typing import Any
@@ -23,10 +24,17 @@ SAMPLE_DATA = ROOT / "gui_sample_data.json"
 AUDIT_TIMEOUT_SECONDS = 60
 PLAN_TIMEOUT_SECONDS = 45
 RELEASE_NOTES_TIMEOUT_SECONDS = 45
+AUDIT_CACHE_TTL_SECONDS = 600
 
 
 class CommandTimeoutError(RuntimeError):
     pass
+
+
+class AuditCacheEntry:
+    def __init__(self, payload: dict[str, Any], created_at: float) -> None:
+        self.payload = payload
+        self.created_at = created_at
 
 
 def parse_args() -> argparse.Namespace:
@@ -194,6 +202,7 @@ class AppState:
         self.audit_errors: list[dict[str, str]] = []
         self.audit_context: tuple[str, bool] | None = None
         self.runtime_drift: dict[str, Any] | None = None
+        self.audit_cache: dict[tuple[str, bool, bool], AuditCacheEntry] = {}
 
     def log(self, message: str) -> None:
         self.activity.append(message)
@@ -212,6 +221,10 @@ def build_audit_command() -> list[str]:
         args.append("--with-release-notes")
     state.audit_command = " ".join(args)
     return args
+
+
+def audit_cache_key() -> tuple[str, bool, bool]:
+    return (state.current_class, state.offline, state.with_release_notes)
 
 
 def build_plan_command() -> list[str]:
@@ -537,6 +550,8 @@ async def run_audit(
     activity_col: ui.log,
     status_label: ui.label,
     spinner: ui.spinner,
+    *,
+    force_refresh: bool = False,
 ) -> None:
     if state.is_running:
         ui.notify("A task is already running", type="warning")
@@ -544,18 +559,30 @@ async def run_audit(
     state.is_running = True
     stage = "init"
     try:
-        state.log("Running audit...")
-        activity_col.push("Running audit...")
-        status_label.set_text("Running audit...")
-        spinner.visible = True
-        stage = "command"
-        payload = await asyncio.to_thread(run_json_command, build_audit_command(), AUDIT_TIMEOUT_SECONDS)
+        cache_key = audit_cache_key()
+        cached = state.audit_cache.get(cache_key)
+        cache_age = time.monotonic() - cached.created_at if cached else None
+        if cached and cache_age is not None and cache_age < AUDIT_CACHE_TTL_SECONDS and not force_refresh:
+            payload = cached.payload
+            state.log(f"Reused cached audit result ({int(cache_age)}s old).")
+            activity_col.push(f"Reused cached audit result ({int(cache_age)}s old). Use Force refresh to run a new audit.")
+            status_label.set_text(f"Using cached audit ({int(cache_age)}s old).")
+            stage = "cached_payload"
+        else:
+            state.log("Running audit...")
+            activity_col.push("Running audit...")
+            status_label.set_text("Running audit...")
+            spinner.visible = True
+            stage = "command"
+            payload = await asyncio.to_thread(run_json_command, build_audit_command(), AUDIT_TIMEOUT_SECONDS)
+            state.audit_cache[cache_key] = AuditCacheEntry(payload, time.monotonic())
         if not isinstance(payload, dict):
             raise RuntimeError(f"Unexpected audit payload type: {type(payload).__name__}")
         stage = "payload"
         state.audit_rows = payload.get("installed") or []
         state.audit_errors = error_entries(payload.get("errors"))
         state.audit_context = (state.current_class, state.offline)
+        audit_metadata = row_dict(payload.get("audit_metadata"))
         stage = "summary"
         refresh_summary(summary_row, state.audit_rows)
         stage = "action_queue"
@@ -568,7 +595,9 @@ async def run_audit(
         render_audit_warnings(warnings_col, state.audit_errors)
         stage = "complete"
         activity_col.push(
-            f"Audit completed. Channel={state.current_channel}, class={state.current_class}, rows={len(filter_rows(state.audit_rows))}, warnings={len(state.audit_errors)}."
+            f"Audit completed. Channel={state.current_channel}, class={state.current_class}, rows={len(filter_rows(state.audit_rows))}, "
+            f"warnings={len(state.audit_errors)}, catalog={audit_metadata.get('catalog_revision', 'unknown')}/"
+            f"{audit_metadata.get('selected_catalog_entries', 'unknown')} selected."
         )
         status_label.set_text(f"Audit completed. {len(filter_rows(state.audit_rows))} row(s) shown. Warnings: {len(state.audit_errors)}.")
         ui.notify(f"Audit completed ({len(state.audit_errors)} warning(s))", type="positive")
@@ -757,24 +786,37 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
         with ui.column().classes("w-full max-w-6xl mx-auto gap-6 p-6"):
             with ui.card().classes("w-full p-6"):
                 ui.label("Govern agent CLIs like operational dependencies, not just packages.").classes("text-3xl font-bold")
-                ui.label("This project checks version drift, install-channel drift, and changelog risk before you decide to upgrade.").classes("text-base text-gray-700")
+                ui.label("Audit agent tools as an operational toolchain: versions, install channels, runtime safety, and local control planes.").classes("text-base text-gray-700")
                 with ui.row():
                     ui.button("View Console", on_click=lambda: tabs.set_value(console_tab))
                     ui.button("Read Install-channel Model", on_click=focus_upgrade_model).props("outline")
             with ui.column().classes("w-full gap-2"):
-                ui.label("Why upgrades are hard").classes("text-xl font-semibold")
+                ui.label("What the audit covers").classes("text-xl font-semibold")
                 ui.label(
-                    "These are the three recurring problems the project is designed to reduce before you decide whether to upgrade or migrate a CLI."
+                    "The Console keeps these concerns separate so an upgrade decision does not hide an installation or runtime problem."
                 ).classes("text-sm text-gray-600")
-            with ui.grid(columns=3).classes("w-full gap-4"):
+            with ui.grid(columns=2).classes("w-full gap-4"):
                 for title, body in [
-                    ("Version drift", "Installed CLIs lag upstream and are easy to forget."),
-                    ("Install-channel drift", "A CLI may still work while no longer following vendor guidance."),
-                    ("Opaque changelogs", "Upstream changes can affect auth, providers, plugins, and session behavior."),
+                    ("Version and release drift", "Compare installed versions with upstream evidence and surface available release-risk signals."),
+                    ("Install-channel policy", "Distinguish vendor-preferred, supported, and nonstandard installation paths."),
+                    ("Node runtime safety", "Check that npm upgrades would run through the intended Node provider before any apply action."),
+                    ("Private Harness boundaries", "Inventory explicit local Harness evidence separately, without scanning private app state or secrets."),
                 ]:
                     with ui.card().classes("p-4"):
                         ui.label(title).classes("text-lg font-semibold")
                         ui.label(body).classes("text-sm text-gray-700")
+            with ui.card().classes("w-full p-5 border border-gray-200"):
+                ui.label("Tool Roles").classes("text-xl font-semibold")
+                ui.label("Classes describe what a tool does in the workflow, not how it was installed.").classes("text-sm text-gray-600")
+                with ui.grid(columns=3).classes("w-full gap-4 mt-3"):
+                    for title, body, color in [
+                        ("agent-cli", "A CLI that directly accepts and runs an agent task, such as Codex, Claude Code, Jules, or Grok.", "bg-blue-50"),
+                        ("tooling-runtime", "A protocol adapter or execution dependency, such as ACPX, Codex ACP, Agent Browser, or uv.", "bg-slate-50"),
+                        ("agent-operations", "A routing, workspace, knowledge, or observability control plane, such as 9Router, nmem, or Multica.", "bg-teal-50"),
+                    ]:
+                        with ui.card().classes(f"p-4 {color}"):
+                            ui.label(title).classes("text-lg font-semibold")
+                            ui.label(body).classes("text-sm text-gray-700")
             with ui.card().classes("w-full p-5 border border-gray-200").props("id=decision-model"):
                 with ui.column().classes("w-full gap-2"):
                     ui.label("Install-channel Upgrade Model").classes("text-xl font-semibold")
@@ -805,6 +847,7 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
                     release_notes = ui.switch("Load release notes", value=True)
                     offline = ui.switch("Offline", value=False)
                     ui.label("Plan scope affects generated upgrade plans only.").classes("text-sm text-gray-600")
+                    ui.label("Run Audit reuses a matching in-memory result for 10 minutes; Force refresh always runs a new audit.").classes("text-xs text-gray-500")
 
                     summary_row = ui.column().classes("w-full gap-2 mt-4")
                     status_strip = ui.column().classes("w-full gap-2 mt-2")
@@ -838,10 +881,16 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
                             render_table(table_col, state.audit_rows, details_content)
                             render_audit_warnings(warnings_col, state.audit_errors)
 
-                    with ui.row().classes("gap-2 flex-wrap"):
+                    with ui.row().classes("w-full gap-4 flex-wrap items-center"):
+                        with ui.row().classes("gap-2 items-center"):
+                            ui.label("Audit").classes("text-sm font-semibold text-gray-700")
                         async def handle_audit() -> None:
                             sync_state()
                             await run_audit(summary_row, status_strip, table_col, details_content, warnings_col, activity_log, status_label, spinner)
+
+                        async def handle_refresh() -> None:
+                            sync_state()
+                            await run_audit(summary_row, status_strip, table_col, details_content, warnings_col, activity_log, status_label, spinner, force_refresh=True)
 
                         async def handle_plan() -> None:
                             sync_state()
@@ -856,9 +905,9 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
 
                         globals()["details_release_notes_handler"] = details_release_notes_handler
                         ui.button("Run Audit", on_click=handle_audit)
+                        ui.button("Force refresh", on_click=handle_refresh).props("outline")
                         ui.button("Generate Upgrade Plan", on_click=handle_plan)
                         ui.button("Check Node Runtime", on_click=handle_runtime_check).props("outline")
-                        ui.button("Refresh", on_click=handle_audit)
                         ui.button("Copy Summary", on_click=lambda: ui.run_javascript(f"navigator.clipboard.writeText({json.dumps({'audit': state.audit_command, 'plan': state.plan_command})!r})"))
 
                     def sync_filters() -> None:
@@ -911,6 +960,11 @@ if __name__ in {"__main__", "__mp_main__"}:
     if not reload_mode:
         print("Hint: run `python3 gui.py --reload` for local GUI hot reload.")
     try:
-        ui.run(title="agent-cli-governor", reload=reload_mode, port=args.port)
+        ui.run(
+            title="agent-cli-governor",
+            reload=reload_mode,
+            port=args.port,
+            uvicorn_reload_includes="*.py,*.json",
+        )
     except KeyboardInterrupt:
         pass

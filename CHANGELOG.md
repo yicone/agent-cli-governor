@@ -16,16 +16,21 @@ The format is intentionally simple and human-maintained.
 - `--check-node-runtime` adds a read-only Node runtime drift check for npm upgrade safety
 - `--inventory-private-harnesses` adds a separate, opt-in inventory of explicit private Agent Harness evidence and client bindings without recursive app scanning, host execution, secret output, or automatic remediation
 - The GUI now exposes a `Load release notes` control, enabled by default for online audits
-- Nori, Vercel fx, Codex ACP, 9Router, and Nowledge Mem CLI are now tracked with agent-cli/tooling-runtime boundaries
+- Nori, Vercel fx, Codex ACP, 9Router, and Nowledge Mem CLI are now tracked with explicit class boundaries
 - 9Router source-linked installs report local checkout and upstream-ref distance without fetching or changing Git state
 
 ### Changed
 
+- 9Router and Nowledge Mem CLI are classified as `agent-operations`: they operate an agent routing or knowledge-management plane, rather than providing a protocol or execution runtime
 - App-bundled CLIs can fall back to the bundle version when their command does not expose a parseable version
 - npm upgrade commands now run through `mise exec node -- ...`; a failed runtime drift check warns during dry runs and blocks npm-channel `--apply` operations without modifying the environment
 - Node runtime checks now recognize `mise`, `nvm`, `fnm`, and `asdf`; validated non-mise providers use a path-bound npm command rather than a bare npm invocation
 - CLI subprocess output is decoded as UTF-8 with replacement so a malformed tool version string cannot fail unrelated audit entries or GUI JSON parsing
 - GUI controls reserve enough width for the Plan scope label
+- GUI audits now reuse matching in-memory results for 10 minutes, while the adjacent `Force refresh` action explicitly bypasses the cache; no audit data is persisted
+- Overview now explains the three tool roles plus runtime-safety and private-Harness boundaries, matching the current governance model
+- JSON HTTP lookups replace malformed UTF-8 bytes before parsing, preventing one malformed upstream response from emitting repeated item warnings
+- Class filtering now happens before probes begin, preventing warnings from unrelated tools and exposing catalog revision metadata for audit diagnostics
 
 ## [0.2.0] - 2026-08-08
 
