@@ -325,7 +325,7 @@
       "latest_source": {
         "type": "regex",
         "url": "https://api.github.com/repos/NousResearch/hermes-agent/releases/latest",
-        "pattern": "\"tag_name\"\\s*:\\s*\"v?([^\"]+)\""
+        "pattern": "\"name\"\\s*:\\s*\"Hermes Agent v([0-9]+\\.[0-9]+\\.[0-9]+)"
       },
       "official_install_url": "https://hermes-agent.nousresearch.com/docs/getting-started/installation",
       "official_release_notes_url": "https://github.com/NousResearch/hermes-agent/releases",
@@ -496,7 +496,7 @@
     {
       "id": "9router",
       "name": "9Router",
-      "tooling_class": "tooling-runtime",
+      "tooling_class": "agent-operations",
       "commands": ["9router"],
       "version_args": [["--version"], ["version"]],
       "latest_source": {
@@ -520,7 +520,7 @@
     {
       "id": "nmem",
       "name": "Nowledge Mem CLI",
-      "tooling_class": "tooling-runtime",
+      "tooling_class": "agent-operations",
       "commands": ["nmem"],
       "version_args": [["--version"], ["version"]],
       "path_channel": "desktop-install",

@@ -15,12 +15,15 @@ from agent_cli_audit import (
     detect_channel,
     get_latest_from_source,
     get_update_command,
+    http_get_json,
+    load_catalog,
     node_runtime_provider,
     npm_command_prefix,
     nori_local_agent_executables,
     private_harness_inventory,
     release_platform,
     run,
+    select_catalog_records,
     source_checkout_details,
     system_proxy_env,
     upgrade_guidance,
@@ -28,6 +31,38 @@ from agent_cli_audit import (
 
 
 class UpgradeGuidanceTests(unittest.TestCase):
+    def test_json_http_lookup_replaces_malformed_utf8(self) -> None:
+        class Response:
+            def __enter__(self) -> "Response":
+                return self
+
+            def __exit__(self, *_: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return b'{"version":"1.2.3\xcf"}'
+
+        with patch("agent_cli_audit.urllib.request.urlopen", return_value=Response()):
+            self.assertEqual(http_get_json("https://example.test"), {"version": "1.2.3\ufffd"})
+
+    def test_catalog_separates_operations_from_runtime_adapters(self) -> None:
+        classes = {record["id"]: record["tooling_class"] for record in load_catalog()}
+
+        self.assertEqual(classes["codex-acp"], "tooling-runtime")
+        self.assertEqual(classes["9router"], "agent-operations")
+        self.assertEqual(classes["claude-code-router"], "agent-operations")
+        self.assertEqual(classes["nmem"], "agent-operations")
+
+    def test_catalog_class_filter_happens_before_probes(self) -> None:
+        catalog = load_catalog()
+
+        selected = select_catalog_records(catalog, set(), "agent-cli")
+
+        self.assertEqual(len(selected), 18)
+        self.assertNotIn("acpx", {record["id"] for record in selected})
+        self.assertIn("grok", {record["id"] for record in selected})
+        self.assertIn("jules", {record["id"] for record in selected})
+
     def test_uses_channel_upgrade_when_native_ownership_is_unverified(self) -> None:
         record = {"id": "copilot", "npm_package": "@github/copilot"}
 
@@ -65,6 +100,13 @@ class UpgradeGuidanceTests(unittest.TestCase):
 
         with patch("agent_cli_audit.http_get_text", return_value='{"tag_name":"rust-v0.147.0"}'):
             self.assertEqual(get_latest_from_source(source), "0.147.0")
+
+    def test_parses_hermes_product_version_from_release_name(self) -> None:
+        source = next(record["latest_source"] for record in load_catalog() if record["id"] == "hermes")
+        payload = '{"tag_name":"v2026.8.19","name":"Hermes Agent v0.20.5 (v2026.8.19)"}'
+
+        with patch("agent_cli_audit.http_get_text", return_value=payload):
+            self.assertEqual(get_latest_from_source(source), "0.20.5")
 
     def test_parses_cursor_agent_latest_from_official_installer(self) -> None:
         source = {

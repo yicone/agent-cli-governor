@@ -339,6 +339,17 @@ def tooling_class(record: dict[str, Any]) -> str:
     return record.get("tooling_class", "agent-cli")
 
 
+def select_catalog_records(
+    catalog: list[dict[str, Any]], selected: set[str], only_class: str | None
+) -> list[dict[str, Any]]:
+    return [
+        record
+        for record in catalog
+        if (not selected or record.get("id") in selected)
+        and (not only_class or tooling_class(record) == only_class)
+    ]
+
+
 def first_existing_command(commands: list[str]) -> tuple[str, str] | None:
     for command in commands:
         path = shutil.which(command)
@@ -760,7 +771,9 @@ def http_get_json(url: str, warnings: list[str] | None = None) -> dict[str, Any]
         try:
             # urllib's default opener honors HTTP(S)_PROXY and macOS system proxy settings.
             with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
-                return json.loads(response.read().decode("utf-8"))
+                # Upstream endpoints occasionally prepend malformed bytes. Keep
+                # the JSON lookup item-scoped instead of failing every dependent CLI.
+                return json.loads(response.read().decode("utf-8", errors="replace"))
         except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError) as exc:
             last_error = str(exc)
             continue
@@ -1480,12 +1493,13 @@ def main() -> int:
         return 0
 
     catalog = load_catalog()
+    catalog_revision = hashlib.sha256(CATALOG_PATH.read_bytes()).hexdigest()[:12]
     rows: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
 
     selected = set(args.tools or [])
-    records = [record for record in catalog if not selected or record.get("id") in selected]
+    records = select_catalog_records(catalog, selected, args.only_class)
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(AUDIT_WORKERS, len(records) or 1)) as executor:
         futures = {
             executor.submit(build_result, record, online=not args.offline, with_release_notes=args.with_release_notes): record
@@ -1519,10 +1533,17 @@ def main() -> int:
 
     rows.sort(key=lambda row: row["id"])
     errors.sort(key=lambda item: (item["id"], item["error"]))
-    rows = filter_rows(rows, args.only_outdated, args.only_nonstandard, args.only_class)
+    rows = filter_rows(rows, args.only_outdated, args.only_nonstandard, None)
 
     if args.json:
-        payload: dict[str, Any] = {"installed": rows}
+        payload: dict[str, Any] = {
+            "installed": rows,
+            "audit_metadata": {
+                "catalog_entries": len(catalog),
+                "selected_catalog_entries": len(records),
+                "catalog_revision": catalog_revision,
+            },
+        }
         if args.all:
             payload["missing"] = missing
         if errors:
