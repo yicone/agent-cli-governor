@@ -30,21 +30,29 @@ The main focus is `agent-cli` tools such as:
 - Claude Code
 - Gemini CLI
 - xAI Grok CLI
+- Nori CLI
+- Vercel fx
 - Kiro CLI
 - Devin CLI
 - Hermes CLI
 - Google Antigravity CLI (`agy`)
+- Google Jules CLI
 - Copilot CLI
 - OpenCode
-- Multica
 - Amp
 - Droid
 - Kilo Code
 - Cline
 
-`acpx` is tracked separately as `tooling-runtime`: it is an ACP client/runtime for invoking coding agents, not an agent provider CLI itself.
+Agent-operations entries currently include Multica, Claude Code Router (`ccr`), Orca, and CodexBar (`codexbar`).
 
-The catalog can also retain a small number of adjacent `tooling-runtime` dependencies, such as `uv`, when they matter to the same local governance workflow.
+The catalog has three intentionally narrow classes:
+
+- `agent-cli`: a CLI that directly accepts and runs a coding-agent task, such as Codex, Claude Code, Jules, or Gemini.
+- `tooling-runtime`: protocol adapters and execution dependencies, such as ACPX, Codex ACP, Agent Browser, OpenSpec, 9Router, `nmem`, and `uv`.
+- `agent-operations`: a user-facing product that coordinates agents, routes model traffic, manages workspaces, or reports usage, such as Multica, Claude Code Router, Orca, and CodexBar.
+
+The distinction prevents orchestration products from being mislabeled as either an Agent provider or a runtime dependency.
 
 ## Requirements
 
@@ -55,7 +63,7 @@ The catalog can also retain a small number of adjacent `tooling-runtime` depende
   - `npm`
   - network access for latest-version and release-note checks
 
-`mise` is required only to execute npm-channel upgrade or migration commands with `--apply`. Other Node version managers remain usable for auditing and dry-run planning, but their runtime topology is intentionally not accepted as an executable npm-upgrade baseline yet.
+The npm upgrade guard supports `mise`, `nvm`, `fnm`, and `asdf`. It validates the active Node/npm topology before an npm plan becomes executable. An unrecognized Node manager remains usable for auditing and dry-run planning, but its npm upgrades are intentionally not executable.
 
 No Python package installation is currently required for the CLI tools.
 
@@ -72,8 +80,11 @@ python3 agent_cli_audit.py --only-outdated
 python3 agent_cli_audit.py --only-nonstandard
 python3 agent_cli_audit.py --only-class agent-cli
 python3 agent_cli_audit.py --only-class tooling-runtime
+python3 agent_cli_audit.py --only-class agent-operations
 python3 agent_cli_audit.py --with-release-notes
 python3 agent_cli_audit.py --check-node-runtime
+python3 agent_cli_audit.py --inventory-private-harnesses
+python3 agent_cli_audit.py --inventory-private-harnesses --private-harness-baseline ~/private-harness-inventory.json
 ```
 
 ### Upgrade Planning
@@ -108,6 +119,7 @@ The GUI is intentionally a thin shell over the existing CLI tools:
 
 - `Overview` explains the upgrade model and shows static example data
 - `Console` runs a local audit and generates a dry-run upgrade plan; it never executes upgrades
+- `Load release notes` is enabled by default for online GUI audits so the Release Risk column can show available changelog evidence. Disable it for a faster version/channel-only audit; offline mode never fetches notes.
 - `Generate Upgrade Plan` reuses the latest matching audit result when possible, avoiding a second full network audit
 - The selected CLI's `Details` panel can load release notes on demand, so changelog retrieval does not block the main audit
 - `Plan scope` controls generated upgrade plans; `Installation status` and `Only outdated` are results-table filters, while the summary cards remain an unfiltered audit baseline
@@ -132,7 +144,7 @@ Run it with `python3 gui.py`. If port `8080` is already in use, choose another p
 The audit output distinguishes:
 
 - `tooling_class`
-  `agent-cli` versus `tooling-runtime`
+  `agent-cli`, `tooling-runtime`, or `agent-operations`
 - `normalized_channel`
   For example `script`, `npm`, `brew-core`, `brew-cask`, `desktop-install`
 - `binary_container`
@@ -151,20 +163,24 @@ The audit output distinguishes:
 ## Notes
 
 - `--offline` skips network-backed latest-version checks and is better for quick local scans.
-- `--check-node-runtime` is a read-only mise runtime topology check for `node`, `npm`, `npx`, and `pnpm`. It detects PATH, symlink, Node executable, and npm-prefix drift; it never repairs the environment. Run it from the actual GUI shell separately when GUI context matters.
+- `--check-node-runtime` is a read-only Node runtime topology check for `node`, `npm`, `npx`, and `pnpm`. It recognizes `mise`, `nvm`, `fnm`, and `asdf`; it detects PATH, Node executable, and npm-prefix drift, and applies the stricter local-wrapper policy only to `mise`. It never repairs the environment. A terminal invocation checks only that terminal; for GUI context, use the GUI's **Run Node Runtime Check** action, which launches the probe from the GUI server process.
+- `--inventory-private-harnesses` is a separate, read-only inventory for private Agent Harness copies. It reports the current shell entrypoints, fixed evidence paths for Zed, Devin Desktop, Multica, Codeg, and Conductor, and explicit safe bindings for Zed, Nori, ACPX, and Codex ACP. It never recursively scans app bundles, runs host-private executables, reads command arguments or secrets, or changes a host. A private copy is a governance risk only when a client binding is confirmed and a specific policy or known risk applies; host presence alone is reported as `unconfirmed`.
+- `--private-harness-baseline PATH` compares against an explicitly supplied JSON report without writing it. Use an external, private location if you choose to retain an inventory; the repository and weekly automation do not store machine inventory results. A changed baseline means manual review is warranted, not automatic repair.
+- To create that external baseline deliberately, redirect the JSON output yourself, for example `python3 agent_cli_audit.py --inventory-private-harnesses --json > ~/private-harness-inventory.json`.
+- The weekly upgrade automation deliberately runs only `--check-node-runtime`; it does not run the private Harness inventory or scan desktop application directories every week.
 - `--only-outdated` only shows installed tools that are both outdated and upgradeable on the current channel.
 - `--only-nonstandard` narrows the report to tools whose install channel does not match the vendor's supported or recommended channels.
-- `--only-class` lets you separate true Agent CLIs from adjacent tooling/runtime dependencies such as `uv`.
+- `--only-class` separates direct Agent CLIs, runtime dependencies, and agent-operations products.
 - `--with-release-notes` fetches the latest release notes where possible and produces a simple risk summary. GitHub Releases are supported directly, and a few vendor-hosted changelog pages are summarized heuristically.
 - A native self-update command is not automatically preferred over npm or Homebrew. When a CLI can explicitly preserve its install method, such as Kilo Code and OpenCode with `--method`, the plan uses that native command. When ownership effects are unverified, the plan preserves the current npm/Homebrew channel and presents native self-update only as an informational alternative.
 - Claude Code uses `claude update`; its installer may migrate installation types, so it is not the default for Homebrew-managed installs. Codex script installs use the official standalone installer, while app-bundled Codex is updated with ChatGPT.app.
 - Antigravity CLI uses Google's native installer at `~/.local/bin/agy` and runs its verified self-updater in the background during normal CLI use. The audit reports its official manifest version but does not treat interactive `agy` startup as an automatic `--apply` action.
 - The tool catalog lives in `agent_cli_catalog.json`.
-- Most entries are `agent-cli`. A small number of adjacent tools can be retained as `tooling-runtime` when they matter to the same upgrade/governance workflow.
+- Most entries are `agent-cli`. `tooling-runtime` covers supporting adapters and dependencies; `agent-operations` covers products that coordinate one or more Agent CLIs without being the Agent itself.
 - The audit output separates the selected `update_command` from `migration_command`. `upgrade_guidance` explains which action is selected, how it affects installation ownership, and when an alternative is only for review or troubleshooting.
 - `agent_cli_upgrade.py` only upgrades entries that are both outdated and on a recognized supported or recommended channel.
-- npm-channel plans run npm through `mise exec node -- ...`. A failed runtime-drift check leaves dry runs visible but blocks `--apply` for plans containing npm-channel upgrades.
-- This is a deliberate safety boundary, not a claim that `mise` is the only valid Node version manager. Support for `nvm`, `fnm`, `asdf`, and similar tools requires an explicit provider-specific runtime check before their npm plans can become executable.
+- npm-channel plans run through the validated Node runtime provider: `mise` uses `mise exec node -- npm`, while `nvm`, `fnm`, and `asdf` use a path-bound npm command with the validated Node bin directory first in `PATH`. A failed or unsupported runtime check leaves dry runs visible but blocks `--apply` for plans containing npm-channel upgrades.
+- 9Router source-checkout detection reads a compatible local launcher and reports the existing local Git relation to its configured upstream ref. It never fetches, rebases, or modifies the checkout; a stale upstream ref is explicitly reported.
 - Missing catalog entries are omitted from the default audit and listed only with `--all`.
 - `agent_cli_upgrade.py --offline` reuses offline audit mode for faster but less complete upgrade planning.
 - `agent_cli_upgrade.py --only-class agent-cli` limits planning to the same class boundary used by the audit.

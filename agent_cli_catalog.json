@@ -77,6 +77,42 @@
       }
     },
     {
+      "id": "nori",
+      "name": "Nori CLI",
+      "tooling_class": "agent-cli",
+      "commands": ["nori"],
+      "version_args": [["--version"], ["version"]],
+      "npm_package": "nori-ai-cli",
+      "official_install_url": "https://github.com/tilework-tech/nori-cli#install",
+      "official_release_notes_url": "https://github.com/tilework-tech/nori-cli/releases",
+      "recommended_channels": ["npm", "github-release"],
+      "supported_channels": ["npm", "github-release"],
+      "channel_notes": {
+        "npm": "Nori documents global npm installation; npm updates use the validated Node runtime provider.",
+        "github-release": "Nori also publishes standalone release binaries."
+      }
+    },
+    {
+      "id": "fx",
+      "name": "Vercel fx",
+      "tooling_class": "agent-cli",
+      "commands": ["fx"],
+      "version_args": [["--version"], ["version"]],
+      "latest_source": {
+        "type": "regex",
+        "url": "https://api.github.com/repos/vercel-labs/fx/releases/latest",
+        "pattern": "\\\"tag_name\\\"\\s*:\\s*\\\"v?([^\\\"]+)\\\""
+      },
+      "official_install_url": "https://github.com/vercel-labs/fx",
+      "official_release_notes_url": "https://github.com/vercel-labs/fx/releases",
+      "recommended_channels": ["script", "github-release"],
+      "supported_channels": ["script", "github-release"],
+      "channel_notes": {
+        "script": "Vercel fx is distributed as a standalone CLI and provides fx upgrade.",
+        "github-release": "Standalone release binaries are supported."
+      }
+    },
+    {
       "id": "claude",
       "name": "Anthropic Claude Code",
       "tooling_class": "agent-cli",
@@ -131,7 +167,7 @@
     {
       "id": "multica",
       "name": "Multica CLI",
-      "tooling_class": "agent-cli",
+      "tooling_class": "agent-operations",
       "commands": ["multica"],
       "version_args": [["--version"], ["version"]],
       "brew_package": "multica",
@@ -327,6 +363,174 @@
       "supported_channels": ["npm"],
       "channel_notes": {
         "npm": "ACPX documents global npm installation; npm updates run through mise."
+      }
+    },
+    {
+      "id": "claude-code-router",
+      "name": "Claude Code Router",
+      "tooling_class": "agent-operations",
+      "commands": ["ccr"],
+      "version_args": [["-v"], ["version"], ["--version"]],
+      "latest_source": {
+        "type": "json",
+        "url": "https://registry.npmjs.org/@musistudio%2fclaude-code-router/latest",
+        "field": "version"
+      },
+      "source_checkout": {
+        "mode": "launcher-relative",
+        "launcher_pattern": "\\$basedir/([^\\\"]+)/dist/cli\\.js",
+        "upstream_remote": "upstream",
+        "upstream_branch": "main"
+      },
+      "official_install_url": "https://github.com/musistudio/claude-code-router/blob/main/docs/src/content/docs/en/guides/install.md",
+      "official_release_notes_url": "https://github.com/musistudio/claude-code-router/releases",
+      "recommended_channels": ["npm"],
+      "supported_channels": ["npm"],
+      "channel_notes": {
+        "npm": "The official CLI distribution is global npm. A linked local checkout is reported as source and is review-only."
+      }
+    },
+    {
+      "id": "orca",
+      "name": "Orca CLI",
+      "tooling_class": "agent-operations",
+      "commands": ["orca"],
+      "version_args": [["--version"]],
+      "latest_source": {
+        "type": "regex",
+        "url": "https://api.github.com/repos/stablyai/orca/releases/latest",
+        "pattern": "\\\"tag_name\\\"\\s*:\\s*\\\"v?([^\\\"]+)\\\""
+      },
+      "app_bundle_channel": "desktop-install",
+      "official_install_url": "https://www.onorca.dev/docs/install",
+      "official_release_notes_url": "https://github.com/stablyai/orca/releases",
+      "recommended_channels": ["desktop-install", "brew-cask"],
+      "supported_channels": ["desktop-install", "brew-cask"],
+      "channel_notes": {
+        "desktop-install": "The installed Orca app bundles its CLI and reports in-app interactive automatic update support.",
+        "brew-cask": "Orca documents its Homebrew cask as a stable desktop-install option."
+      }
+    },
+    {
+      "id": "codexbar",
+      "name": "CodexBar CLI",
+      "tooling_class": "agent-operations",
+      "commands": ["codexbar"],
+      "version_args": [["--version"]],
+      "latest_source": {
+        "type": "regex",
+        "url": "https://api.github.com/repos/steipete/CodexBar/releases/latest",
+        "pattern": "\\\"tag_name\\\"\\s*:\\s*\\\"v?([^\\\"]+)\\\""
+      },
+      "app_bundle_channel": "desktop-install",
+      "official_install_url": "https://github.com/bcharleson/codexbar/blob/main/docs/cli.md",
+      "official_release_notes_url": "https://github.com/steipete/CodexBar/releases",
+      "recommended_channels": ["desktop-install"],
+      "supported_channels": ["desktop-install", "brew-cask"],
+      "channel_notes": {
+        "desktop-install": "CodexBar's app installs a bundled CLI symlink into a writable bin directory.",
+        "brew-cask": "CodexBar also documents a Homebrew cask distribution."
+      }
+    },
+    {
+      "id": "jules",
+      "name": "Google Jules CLI",
+      "tooling_class": "agent-cli",
+      "commands": ["jules"],
+      "version_args": [["version"], ["--version"]],
+      "npm_package": "@google/jules",
+      "path_channel": "npm",
+      "official_install_url": "https://jules.google",
+      "official_release_notes_url": "https://jules.google",
+      "recommended_channels": ["npm"],
+      "supported_channels": ["npm"],
+      "channel_notes": {
+        "npm": "Jules is installed as the official global npm CLI; npm updates use the validated Node runtime provider."
+      }
+    },
+    {
+      "id": "agent-browser",
+      "name": "Agent Browser",
+      "tooling_class": "tooling-runtime",
+      "commands": ["agent-browser"],
+      "version_args": [["--version"]],
+      "npm_package": "agent-browser",
+      "official_install_url": "https://github.com/vercel-labs/agent-browser",
+      "official_release_notes_url": "https://github.com/vercel-labs/agent-browser/releases",
+      "recommended_channels": ["npm"],
+      "supported_channels": ["npm"],
+      "channel_notes": {
+        "npm": "Agent Browser is a browser-automation dependency for agents; npm updates use the validated Node runtime provider."
+      }
+    },
+    {
+      "id": "openspec",
+      "name": "OpenSpec",
+      "tooling_class": "tooling-runtime",
+      "commands": ["openspec"],
+      "version_args": [["--version"]],
+      "npm_package": "@fission-ai/openspec",
+      "official_install_url": "https://github.com/Fission-AI/OpenSpec",
+      "official_release_notes_url": "https://github.com/Fission-AI/OpenSpec/releases",
+      "recommended_channels": ["npm"],
+      "supported_channels": ["npm"],
+      "channel_notes": {
+        "npm": "OpenSpec provides an agent workflow and specification toolchain; npm updates use the validated Node runtime provider."
+      }
+    },
+    {
+      "id": "codex-acp",
+      "name": "Codex ACP adapter",
+      "tooling_class": "tooling-runtime",
+      "commands": ["codex-acp"],
+      "version_args": [["--version"], ["version"]],
+      "npm_package": "@agentclientprotocol/codex-acp",
+      "official_install_url": "https://github.com/agentclientprotocol/codex-acp#installation",
+      "official_release_notes_url": "https://github.com/agentclientprotocol/codex-acp/releases",
+      "recommended_channels": ["npm"],
+      "supported_channels": ["npm"],
+      "channel_notes": {
+        "npm": "The ACP adapter documents global npm installation; npm updates use the validated Node runtime provider."
+      }
+    },
+    {
+      "id": "9router",
+      "name": "9Router",
+      "tooling_class": "tooling-runtime",
+      "commands": ["9router"],
+      "version_args": [["--version"], ["version"]],
+      "latest_source": {
+        "type": "json",
+        "url": "https://raw.githubusercontent.com/decolua/9router/master/package.json",
+        "field": "version"
+      },
+      "source_checkout": {
+        "launcher_pattern": "exec \\\"\\$NODE_BIN\\\" \\\"([^\\\"]+)/cli/cli\\.js\\\"",
+        "upstream_remote": "upstream",
+        "upstream_branch": "master"
+      },
+      "official_install_url": "https://github.com/decolua/9router",
+      "official_release_notes_url": "https://github.com/decolua/9router/releases",
+      "recommended_channels": ["source"],
+      "supported_channels": ["source"],
+      "channel_notes": {
+        "source": "A linked local checkout is audited against its configured upstream remote without fetching or modifying the checkout."
+      }
+    },
+    {
+      "id": "nmem",
+      "name": "Nowledge Mem CLI",
+      "tooling_class": "tooling-runtime",
+      "commands": ["nmem"],
+      "version_args": [["--version"], ["version"]],
+      "path_channel": "desktop-install",
+      "official_install_url": "https://mem.nowledge.co/docs/cli",
+      "official_release_notes_url": "https://mem.nowledge.co/docs/changelog",
+      "recommended_channels": ["desktop-install", "pip"],
+      "supported_channels": ["desktop-install", "pip"],
+      "channel_notes": {
+        "desktop-install": "The Nowledge Mem desktop app installs and repairs the local nmem wrapper.",
+        "pip": "The standalone nmem-cli package is supported for CLI-only machines."
       }
     },
     {

@@ -8,13 +8,24 @@ The format is intentionally simple and human-maintained.
 
 ### Added
 
+- `agent-operations` is a separate catalog class for agent orchestration, routing, workspace, and observability products; Multica, Claude Code Router, Orca, and CodexBar are tracked in this class
+- Google Jules CLI, Agent Browser, and OpenSpec are now tracked from their installed npm distributions
+- Linked source checkouts can report their local Git relation through a resolved executable path without fetching or modifying the checkout
 - Cursor Agent CLI (`agent`) is now tracked as an official script-installed CLI with installer-backed version checks and `agent update` guidance
 - xAI Grok CLI and ACPX are now tracked; Grok is an `agent-cli`, while ACPX is a separate `tooling-runtime`
-- `--check-node-runtime` adds a read-only mise Node runtime drift check for npm upgrade safety
+- `--check-node-runtime` adds a read-only Node runtime drift check for npm upgrade safety
+- `--inventory-private-harnesses` adds a separate, opt-in inventory of explicit private Agent Harness evidence and client bindings without recursive app scanning, host execution, secret output, or automatic remediation
+- The GUI now exposes a `Load release notes` control, enabled by default for online audits
+- Nori, Vercel fx, Codex ACP, 9Router, and Nowledge Mem CLI are now tracked with agent-cli/tooling-runtime boundaries
+- 9Router source-linked installs report local checkout and upstream-ref distance without fetching or changing Git state
 
 ### Changed
 
+- App-bundled CLIs can fall back to the bundle version when their command does not expose a parseable version
 - npm upgrade commands now run through `mise exec node -- ...`; a failed runtime drift check warns during dry runs and blocks npm-channel `--apply` operations without modifying the environment
+- Node runtime checks now recognize `mise`, `nvm`, `fnm`, and `asdf`; validated non-mise providers use a path-bound npm command rather than a bare npm invocation
+- CLI subprocess output is decoded as UTF-8 with replacement so a malformed tool version string cannot fail unrelated audit entries or GUI JSON parsing
+- GUI controls reserve enough width for the Plan scope label
 
 ## [0.2.0] - 2026-08-08
 

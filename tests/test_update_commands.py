@@ -1,19 +1,27 @@
 import os
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from agent_cli_audit import (
+    app_bundle_version,
     binary_container,
     check_node_runtime,
+    configured_executables,
     detect_channel,
     get_latest_from_source,
     get_update_command,
+    node_runtime_provider,
+    npm_command_prefix,
+    nori_local_agent_executables,
+    private_harness_inventory,
     release_platform,
     run,
+    source_checkout_details,
     system_proxy_env,
     upgrade_guidance,
 )
@@ -107,12 +115,109 @@ class UpgradeGuidanceTests(unittest.TestCase):
         self.assertEqual(guidance["kind"], "native_self_update")
         self.assertEqual(guidance["command"], "grok update")
 
-    def test_node_runtime_check_reports_missing_mise(self) -> None:
+    def test_node_runtime_check_reports_missing_node_and_npm(self) -> None:
         with patch("agent_cli_audit.shutil.which", return_value=None):
             result = check_node_runtime()
 
         self.assertEqual(result["status"], "drift")
-        self.assertIn("mise is not available on PATH", result["issues"])
+        self.assertIn("node and npm must both be available on PATH", result["issues"])
+
+    def test_recognizes_nvm_and_builds_a_path_bound_npm_command(self) -> None:
+        node = "/Users/example/.nvm/versions/node/v22.14.0/bin/node"
+        self.assertEqual(node_runtime_provider(node)["id"], "nvm")
+        runtime = {
+            "status": "pass",
+            "executable": True,
+            "runtime_provider": {"id": "nvm"},
+            "runtime_paths": {
+                "node": node,
+                "npm": "/Users/example/.nvm/versions/node/v22.14.0/bin/npm",
+            },
+        }
+        self.assertEqual(
+            npm_command_prefix(runtime),
+            "env PATH=/Users/example/.nvm/versions/node/v22.14.0/bin:$PATH /Users/example/.nvm/versions/node/v22.14.0/bin/npm",
+        )
+
+    def test_reports_source_checkout_distance_without_fetching(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            checkout = Path(temporary) / "9router"
+            (checkout / ".git").mkdir(parents=True)
+            (checkout / "cli").mkdir()
+            launcher = Path(temporary) / "9router-launcher"
+            launcher.write_text(f'exec "$NODE_BIN" "{checkout}/cli/cli.js" "$@"\n')
+
+            def output(args: list[str]) -> tuple[str | None, str | None]:
+                if args[-2:] == ["rev-parse", "HEAD"]:
+                    return "local", None
+                if args[-1] == "upstream/master":
+                    return "upstream", None
+                if args[-2:] == ["status", "--porcelain"]:
+                    return "", None
+                if args[-2:] == ["--count", "HEAD...upstream/master"]:
+                    return "2\t1", None
+                return None, "unexpected command"
+
+            with patch("agent_cli_audit.command_output", side_effect=output):
+                details = source_checkout_details(
+                    str(launcher),
+                    {
+                        "launcher_pattern": r'exec "\$NODE_BIN" "([^"]+)/cli/cli\.js"',
+                        "upstream_remote": "upstream",
+                        "upstream_branch": "master",
+                    },
+                )
+
+        self.assertEqual(details["source_checkout_path"], str(checkout))
+        self.assertEqual(details["source_ahead"], 2)
+        self.assertEqual(details["source_behind"], 1)
+
+    def test_reports_launcher_relative_checkout_without_fetching(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            checkout = Path(temporary) / "claude-code-router"
+            (checkout / ".git").mkdir(parents=True)
+            cli = checkout / "dist/cli.js"
+            cli.parent.mkdir()
+            cli.touch()
+            pnpm_home = Path(temporary) / "pnpm"
+            pnpm_home.mkdir()
+            launcher = pnpm_home / "ccr"
+            relative_checkout = os.path.relpath(checkout, pnpm_home)
+            launcher.write_text(f'exec node "$basedir/{relative_checkout}/dist/cli.js" "$@"\n')
+
+            def output(args: list[str]) -> tuple[str | None, str | None]:
+                if args[-2:] == ["rev-parse", "HEAD"]:
+                    return "local", None
+                if args[-1] == "upstream/main":
+                    return "upstream", None
+                if args[-2:] == ["status", "--porcelain"]:
+                    return "", None
+                if args[-2:] == ["--count", "HEAD...upstream/main"]:
+                    return "9\t0", None
+                return None, "unexpected command"
+
+            with patch("agent_cli_audit.command_output", side_effect=output):
+                details = source_checkout_details(
+                    str(launcher),
+                    {
+                        "mode": "launcher-relative",
+                        "launcher_pattern": r'\$basedir/([^\"]+)/dist/cli\.js',
+                        "upstream_remote": "upstream",
+                        "upstream_branch": "main",
+                    },
+                )
+
+        self.assertEqual(Path(details["source_checkout_path"]).resolve(), checkout.resolve())
+        self.assertEqual(details["source_ahead"], 9)
+        self.assertEqual(details["source_behind"], 0)
+
+    def test_reads_app_bundle_version_as_a_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            executable = Path(temporary) / "Orca.app/Contents/Resources/bin/orca"
+            executable.parent.mkdir(parents=True)
+            executable.touch()
+            with patch("agent_cli_audit.command_output", return_value=("1.4.184\n", None)):
+                self.assertEqual(app_bundle_version(str(executable)), "1.4.184")
 
     def test_bridges_macos_proxy_to_child_process_environment(self) -> None:
         with patch("agent_cli_audit.urllib.request.getproxies", return_value={"http": "http://127.0.0.1:7890"}):
@@ -171,6 +276,57 @@ class UpgradeGuidanceTests(unittest.TestCase):
             time.sleep(0.05)
         else:
             self.fail("timed-out command left its child process running")
+
+    def test_command_output_replaces_invalid_utf8_from_a_cli(self) -> None:
+        completed = run(
+            [sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'\\xcf')"],
+            timeout=5,
+        )
+
+        self.assertEqual(completed.stdout, "\ufffd")
+
+    def test_private_inventory_extracts_only_zed_executable_tokens(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            config = Path(temporary) / "settings.json"
+            config.write_text(
+                '{"agent_servers":{"private":{"command":"codex-acp --token should-not-appear"}}}'
+            )
+
+            self.assertEqual(configured_executables(config, "agent_servers"), ["codex-acp"])
+
+    def test_private_inventory_extracts_only_nori_local_agent_command(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            config = Path(temporary) / "config.toml"
+            config.write_text(
+                '[agents.distribution.local]\ncommand = "acpx"\nargs = ["--token", "hidden"]\n'
+            )
+
+            self.assertEqual(nori_local_agent_executables(config), ["acpx"])
+
+    def test_private_inventory_compares_external_baseline_without_writing_it(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            bundle = root / "Test.app"
+            private_binary = bundle / "Contents/Resources/codex"
+            private_binary.parent.mkdir(parents=True)
+            private_binary.write_text("placeholder")
+            private_binary.chmod(0o755)
+            baseline = root / "inventory.json"
+            baseline.write_text('{"private_harness_inventory":{"fingerprint":"old"}}')
+            before = baseline.read_text()
+
+            with patch("agent_cli_audit.PRIVATE_HARNESS_HOSTS", (("test", "Test", bundle, root / "config.json"),)), patch(
+                "agent_cli_audit.DEFAULT_HARNESS_ENTRYPOINTS", ()
+            ), patch("agent_cli_audit.Path.home", return_value=root), patch(
+                "agent_cli_audit.app_bundle_metadata", return_value={"bundle_path": str(bundle)}
+            ):
+                inventory = private_harness_inventory(baseline)
+            after = baseline.read_text()
+
+        self.assertEqual(inventory["baseline"]["status"], "changed")
+        self.assertEqual(inventory["private_installations"][0]["version_status"], "not-probed")
+        self.assertEqual(inventory["governance_risks"], [])
+        self.assertEqual(after, before)
 
 
 if __name__ == "__main__":

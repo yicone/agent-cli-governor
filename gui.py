@@ -42,6 +42,8 @@ def run_json_command(
     process = subprocess.Popen(
         args,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         cwd=ROOT,
@@ -68,7 +70,21 @@ def run_json_command(
     completed = subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
     if completed.returncode != 0 and not allow_nonzero:
         raise RuntimeError(completed.stderr.strip() or completed.stdout.strip() or "Command failed")
-    return json.loads(completed.stdout)
+    if not completed.stdout.strip():
+        raise RuntimeError(
+            f"Command returned no JSON (exit {completed.returncode}): "
+            f"{completed.stderr.strip() or 'no stderr'}"
+        )
+    try:
+        payload = json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Command returned invalid JSON (exit {completed.returncode}): "
+            f"{completed.stderr.strip() or completed.stdout[:200]!r}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"Command returned a JSON {type(payload).__name__}, expected an object")
+    return payload
 
 
 def load_sample_rows() -> list[dict[str, Any]]:
@@ -170,6 +186,7 @@ class AppState:
         self.current_class = "agent-cli"
         self.current_channel = "recommended"
         self.offline = False
+        self.with_release_notes = True
         self.is_running = False
         self.status_filter = "all"
         self.only_outdated = False
@@ -191,6 +208,8 @@ def build_audit_command() -> list[str]:
     args = ["python3", str(AUDIT), "--json", "--only-class", state.current_class]
     if state.offline:
         args.append("--offline")
+    elif state.with_release_notes:
+        args.append("--with-release-notes")
     state.audit_command = " ".join(args)
     return args
 
@@ -650,7 +669,9 @@ async def run_node_runtime_check(activity_col: ui.log, status_label: ui.label, s
             raise RuntimeError("Runtime drift payload was missing")
         state.runtime_drift = runtime_drift
         runtime_status = runtime_drift.get("status", "unknown")
-        runtime_label.set_text(f"Node runtime: {runtime_status}")
+        provider = runtime_drift.get("runtime_provider")
+        provider_id = provider.get("id", "unknown") if isinstance(provider, dict) else "unknown"
+        runtime_label.set_text(f"Node runtime: {provider_id} ({runtime_status})")
         if runtime_status == "pass":
             activity_col.push("Node runtime drift check passed in the GUI process context.")
             status_label.set_text("Node runtime check passed.")
@@ -779,8 +800,9 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
         with ui.column().classes("w-full max-w-7xl mx-auto gap-4 p-6"):
             with ui.card().classes("w-full p-4"):
                 with ui.row().classes("items-center gap-3 w-full flex-wrap"):
-                    class_select = ui.select(["agent-cli", "tooling-runtime"], value="agent-cli", label="Class")
-                    plan_scope = ui.select(["recommended", "supported", "all"], value="recommended", label="Plan scope")
+                    class_select = ui.select(["agent-cli", "tooling-runtime", "agent-operations"], value="agent-cli", label="Class").classes("w-[190px] flex-none")
+                    plan_scope = ui.select(["recommended", "supported", "all"], value="recommended", label="Plan scope").classes("w-[190px] flex-none")
+                    release_notes = ui.switch("Load release notes", value=True)
                     offline = ui.switch("Offline", value=False)
                     ui.label("Plan scope affects generated upgrade plans only.").classes("text-sm text-gray-600")
 
@@ -807,6 +829,7 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
                         state.current_class = class_select.value
                         state.current_channel = plan_scope.value
                         state.offline = bool(offline.value)
+                        state.with_release_notes = bool(release_notes.value)
 
                     def refresh_current_table() -> None:
                         if state.audit_rows:
@@ -862,7 +885,7 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
                             audit_code.value = state.audit_command
                             plan_code.value = state.plan_command
 
-                        for widget in [class_select, plan_scope, offline]:
+                        for widget in [class_select, plan_scope, release_notes, offline]:
                             widget.on("update:model-value", lambda _: refresh_commands())
                         refresh_commands()
 

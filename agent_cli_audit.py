@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import hashlib
 import json
 import os
 import platform
 import re
+import shlex
 import signal
 import shutil
 import subprocess
@@ -20,7 +22,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parent
 CATALOG_PATH = ROOT / "agent_cli_catalog.json"
-SEMVER_RE = re.compile(r"\b\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?\b")
+SEMVER_RE = re.compile(r"\bv?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)\b")
 GITHUB_RELEASES_RE = re.compile(r"^https://github\.com/([^/]+)/([^/]+)/releases/?$")
 HTML_TAG_RE = re.compile(r"<[^>]+>")
 HIGH_RISK_TERMS = [
@@ -47,6 +49,14 @@ HTTP_ATTEMPTS = 2
 PACKAGE_MANAGER_TIMEOUT_SECONDS = 12
 AUDIT_WORKERS = 4
 NODE_RUNTIME_COMMANDS = ("node", "npm", "npx", "pnpm")
+DEFAULT_HARNESS_ENTRYPOINTS = ("codex", "agent", "node", "npm", "npx", "pnpm")
+PRIVATE_HARNESS_HOSTS = (
+    ("zed", "Zed", Path("/Applications/Zed.app"), Path.home() / ".config/zed/settings.json"),
+    ("devin-desktop", "Devin Desktop", Path("/Applications/Devin.app"), Path.home() / ".config/devin/config.json"),
+    ("multica", "Multica", Path("/Applications/Multica.app"), Path.home() / ".multica/config.json"),
+    ("codeg", "Codeg", Path("/Applications/codeg.app"), Path.home() / ".codeg"),
+    ("conductor", "Conductor", Path("/Applications/Conductor.app"), Path.home() / ".conductor/settings.toml"),
+)
 MEDIUM_RISK_TERMS = [
     "hook",
     "plugin",
@@ -80,6 +90,8 @@ def run(
     process = subprocess.Popen(
         args,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         env=merged_env,
@@ -135,37 +147,129 @@ def command_output(args: list[str]) -> tuple[str | None, str | None]:
     return completed.stdout.strip(), None
 
 
+def command_runtime_path(command_path: str | None) -> str | None:
+    """Resolve the target of a simple local wrapper without executing shell code."""
+    if not command_path:
+        return None
+    path = Path(command_path)
+    if path.is_symlink():
+        return resolve_path(command_path)
+    if path.is_file():
+        try:
+            match = re.search(r"^exec\s+([^\s]+)", path.read_text(), re.MULTILINE)
+            if match:
+                return resolve_path(match.group(1))
+        except OSError:
+            pass
+    return resolve_path(command_path)
+
+
+def node_runtime_provider(node_path: str | None) -> dict[str, Any]:
+    """Identify a supported Node manager from the active Node executable path."""
+    resolved = resolve_path(node_path) if node_path else ""
+    if shutil.which("mise"):
+        mise_node, _ = command_output(["mise", "which", "node"])
+        if mise_node and resolve_path(mise_node) == resolved:
+            return {"id": "mise", "execution": "mise-exec", "executable": True}
+    for provider, marker in {
+        "nvm": "/.nvm/versions/node/",
+        "fnm": "/.local/share/fnm/node-versions/",
+        "asdf": "/.asdf/installs/nodejs/",
+    }.items():
+        if marker in resolved:
+            return {"id": provider, "execution": "path-bound", "executable": True}
+    return {"id": "unsupported", "execution": None, "executable": False}
+
+
+def node_execution_prefix(runtime_drift: dict[str, Any] | None = None) -> str | None:
+    """Return a validated Node execution environment without a command suffix."""
+    runtime = runtime_drift or check_node_runtime()
+    if runtime.get("status") != "pass" or not runtime.get("executable"):
+        return None
+    provider = safe_dict(runtime.get("runtime_provider"))
+    if provider.get("id") == "mise":
+        return "mise exec node --"
+    command_paths = safe_dict(runtime.get("runtime_paths"))
+    node_path = command_paths.get("node")
+    npm_path = command_paths.get("npm")
+    if not node_path or not npm_path:
+        return None
+    node_bin = str(Path(resolve_path(node_path)).parent)
+    return f"env PATH={shlex.quote(node_bin)}:$PATH"
+
+
+def npm_command_prefix(runtime_drift: dict[str, Any] | None = None) -> str | None:
+    """Return a manager-bound npm command only after the runtime topology passes."""
+    prefix = node_execution_prefix(runtime_drift)
+    if not prefix:
+        return None
+    runtime = runtime_drift or check_node_runtime()
+    npm_path = safe_dict(runtime.get("runtime_paths")).get("npm")
+    if not npm_path:
+        return None
+    if safe_dict(runtime.get("runtime_provider")).get("id") == "mise":
+        return f"{prefix} npm"
+    return f"{prefix} {shlex.quote(npm_path)}"
+
+
 def check_node_runtime() -> dict[str, Any]:
-    """Read-only verification that npm tooling is owned by the active mise Node."""
+    """Read-only validation of a supported Node runtime for npm upgrades."""
+    command_paths = {command: shutil.which(command) for command in NODE_RUNTIME_COMMANDS}
+    runtime_paths = {command: command_runtime_path(path) for command, path in command_paths.items()}
     result: dict[str, Any] = {
-        "status": "pass",
+        "status": "unsupported",
+        "runtime_provider": {"id": "unresolved", "execution": None, "executable": False},
+        "executable": False,
         "mise_paths": {},
-        "command_paths": {},
+        "command_paths": command_paths,
+        "runtime_paths": runtime_paths,
         "local_entries": {},
         "versions": {},
         "issues": [],
         "gui_probe_required": (
-            "Run `python3 agent_cli_audit.py --check-node-runtime` from the actual GUI shell "
-            "to verify that GUI process context; this probe cannot validate another application's PATH."
+            "A terminal probe validates only its own environment. Use the GUI's Run Node Runtime Check "
+            "action to validate the GUI server process; it launches this probe from that process."
         ),
     }
-
-    if not shutil.which("mise"):
+    node_path = runtime_paths.get("node")
+    npm_path = runtime_paths.get("npm")
+    if not node_path or not npm_path:
         result["status"] = "drift"
-        result["issues"].append("mise is not available on PATH")
+        result["issues"].append("node and npm must both be available on PATH")
         return result
 
-    mise_paths: dict[str, str] = {}
-    for command in NODE_RUNTIME_COMMANDS:
-        output, error = command_output(["mise", "which", command])
-        if not output:
-            result["status"] = "drift"
-            result["issues"].append(f"mise which {command} failed: {error or 'no path returned'}")
-            continue
-        mise_path = output.splitlines()[0]
-        mise_paths[command] = mise_path
-        result["mise_paths"][command] = mise_path
+    provider = node_runtime_provider(node_path)
+    result["runtime_provider"] = provider
+    if provider["id"] == "unsupported":
+        result["issues"].append(
+            "Node runtime provider is not supported for executable npm upgrades; use dry-run only"
+        )
+    if provider["id"] == "mise":
+        for command in NODE_RUNTIME_COMMANDS:
+            output, error = command_output(["mise", "which", command])
+            if not output:
+                result["status"] = "drift"
+                result["issues"].append(f"mise which {command} failed: {error or 'no path returned'}")
+            else:
+                result["mise_paths"][command] = output.splitlines()[0]
 
+    for command, command_path in command_paths.items():
+        if not command_path:
+            result["status"] = "drift"
+            result["issues"].append(f"command -v {command} found no executable")
+            continue
+        version, version_error = command_output([command_path, "--version"])
+        if version:
+            result["versions"][command] = version.splitlines()[0]
+        elif version_error:
+            result["status"] = "drift"
+            result["issues"].append(f"{command} --version failed: {version_error}")
+
+        if provider["id"] != "mise":
+            continue
+        mise_path = result["mise_paths"].get(command)
+        if not mise_path:
+            continue
         local_entry = Path.home() / ".local/bin" / command
         local_data: dict[str, Any] = {"path": str(local_entry), "exists": local_entry.exists() or local_entry.is_symlink()}
         local_wrapper_matches = False
@@ -178,8 +282,7 @@ def check_node_runtime() -> dict[str, Any]:
             local_data["is_symlink"] = False
             if local_entry.is_file():
                 try:
-                    wrapper = local_entry.read_text()
-                    wrapper_match = re.search(r"^exec\s+([^\s]+)", wrapper, re.MULTILINE)
+                    wrapper_match = re.search(r"^exec\s+([^\s]+)", local_entry.read_text(), re.MULTILINE)
                     if wrapper_match:
                         wrapper_target = wrapper_match.group(1)
                         local_data["wrapper_target"] = wrapper_target
@@ -188,13 +291,6 @@ def check_node_runtime() -> dict[str, Any]:
                 except OSError:
                     pass
         result["local_entries"][command] = local_data
-
-        command_path = shutil.which(command)
-        result["command_paths"][command] = command_path
-        if not command_path:
-            result["status"] = "drift"
-            result["issues"].append(f"command -v {command} found no executable")
-            continue
         is_active_local_wrapper = Path(command_path) == local_entry and local_wrapper_matches
         if resolve_path(command_path) != resolve_path(mise_path) and not is_active_local_wrapper:
             result["status"] = "drift"
@@ -202,35 +298,26 @@ def check_node_runtime() -> dict[str, Any]:
                 f"{command} resolves to {resolve_path(command_path)}, expected {resolve_path(mise_path)} from mise"
             )
 
-        version, version_error = command_output([command_path, "--version"])
-        if version:
-            result["versions"][command] = version.splitlines()[0]
-        elif version_error:
-            result["issues"].append(f"{command} --version failed: {version_error}")
-            result["status"] = "drift"
+    exec_path, exec_error = command_output([node_path, "-p", "process.execPath"])
+    result["node_exec_path"] = exec_path
+    if not exec_path or resolve_path(exec_path) != resolve_path(node_path):
+        result["status"] = "drift"
+        result["issues"].append(
+            f"node process.execPath is {exec_path or exec_error or 'unknown'}, expected {resolve_path(node_path)}"
+        )
+    prefix, prefix_error = command_output([npm_path, "config", "get", "prefix"])
+    result["npm_prefix"] = prefix
+    expected_prefix = str(Path(resolve_path(node_path)).parent.parent)
+    result["expected_npm_prefix"] = expected_prefix
+    if not prefix or resolve_path(prefix) != resolve_path(expected_prefix):
+        result["status"] = "drift"
+        result["issues"].append(
+            f"npm prefix is {prefix or prefix_error or 'unknown'}, expected {expected_prefix} for active Node"
+        )
 
-    node_path = mise_paths.get("node")
-    if node_path:
-        exec_path, exec_error = command_output([node_path, "-p", "process.execPath"])
-        result["node_exec_path"] = exec_path
-        if not exec_path or resolve_path(exec_path) != resolve_path(node_path):
-            result["status"] = "drift"
-            result["issues"].append(
-                f"node process.execPath is {exec_path or exec_error or 'unknown'}, expected {resolve_path(node_path)}"
-            )
-
-    npm_path = mise_paths.get("npm")
-    if npm_path and node_path:
-        prefix, prefix_error = command_output([npm_path, "config", "get", "prefix"])
-        result["npm_prefix"] = prefix
-        expected_prefix = str(Path(resolve_path(node_path)).parent.parent)
-        result["expected_npm_prefix"] = expected_prefix
-        if not prefix or resolve_path(prefix) != resolve_path(expected_prefix):
-            result["status"] = "drift"
-            result["issues"].append(
-                f"npm prefix is {prefix or prefix_error or 'unknown'}, expected {expected_prefix} for active mise Node"
-            )
-
+    if result["status"] != "drift" and provider["id"] != "unsupported":
+        result["status"] = "pass"
+        result["executable"] = True
     return result
 
 
@@ -293,6 +380,255 @@ def binary_container(path: str, resolved_path: str) -> str:
     return "standalone"
 
 
+def app_bundle_version(resolved_path: str) -> str | None:
+    """Return an app bundle's version when its CLI lacks a version command."""
+    path = Path(resolved_path)
+    for parent in [path, *path.parents]:
+        if parent.suffix != ".app":
+            continue
+        info = parent / "Contents/Info.plist"
+        output, _ = command_output(["/usr/libexec/PlistBuddy", "-c", "Print :CFBundleShortVersionString", str(info)])
+        return parse_version(output or "") or output
+    return None
+
+
+def source_checkout_details(path: str, source: dict[str, Any]) -> dict[str, Any]:
+    """Read linked-checkout metadata without fetching or modifying Git state."""
+    pattern = source.get("launcher_pattern")
+    if pattern:
+        try:
+            launcher = Path(path).read_text()
+        except OSError:
+            return {}
+        match = re.search(str(pattern), launcher)
+        if not match:
+            return {}
+        target = Path(match.group(1))
+        checkout = (Path(path).parent / target).resolve() if source.get("mode") == "launcher-relative" else target
+    elif source.get("mode") == "resolved-parent":
+        resolved = Path(resolve_path(path))
+        checkout = next((parent for parent in [resolved.parent, *resolved.parents] if (parent / ".git").exists()), None)
+        if checkout is None:
+            return {}
+    else:
+        return {}
+    if not (checkout / ".git").exists():
+        return {"source_checkout_path": str(checkout), "source_checkout_error": "not a Git checkout"}
+
+    def git_output(*args: str) -> str | None:
+        output, _ = command_output(["git", "-C", str(checkout), *args])
+        return output
+
+    details: dict[str, Any] = {"source_checkout_path": str(checkout)}
+    details["source_commit"] = git_output("rev-parse", "HEAD")
+    details["source_dirty"] = bool(git_output("status", "--porcelain"))
+    remote = str(source.get("upstream_remote", "upstream"))
+    branch = str(source.get("upstream_branch", "master"))
+    upstream_ref = f"{remote}/{branch}"
+    details["source_upstream_ref"] = upstream_ref
+    upstream_commit = git_output("rev-parse", upstream_ref)
+    if not upstream_commit:
+        details["source_upstream_error"] = f"{upstream_ref} is not available locally; run git fetch {remote} manually"
+        return details
+    details["source_upstream_commit"] = upstream_commit
+    distance = git_output("rev-list", "--left-right", "--count", f"HEAD...{upstream_ref}")
+    if distance:
+        try:
+            ahead, behind = distance.split()
+            details["source_ahead"] = int(ahead)
+            details["source_behind"] = int(behind)
+        except ValueError:
+            details["source_upstream_error"] = f"could not parse Git distance: {distance}"
+    return details
+
+
+def private_harness_entrypoint(command: str) -> dict[str, Any]:
+    path = shutil.which(command)
+    current, _ = get_current_version(command, [["--version"], ["version"]]) if path else (None, None)
+    return {
+        "command": command,
+        "path": path,
+        "resolved_path": resolve_path(path) if path else None,
+        "version": current,
+        "evidence": "current-shell-command-resolution",
+        "confidence": "high" if path else "none",
+    }
+
+
+def app_bundle_metadata(bundle: Path) -> dict[str, Any]:
+    info = bundle / "Contents/Info.plist"
+    version, _ = command_output(["/usr/libexec/PlistBuddy", "-c", "Print :CFBundleShortVersionString", str(info)])
+    identifier, _ = command_output(["/usr/libexec/PlistBuddy", "-c", "Print :CFBundleIdentifier", str(info)])
+    return {"bundle_path": str(bundle), "bundle_id": identifier, "bundle_version": version}
+
+
+def configured_executables(path: Path, key: str) -> list[str]:
+    """Extract only executable tokens from an explicit config key; never emit arguments."""
+    try:
+        payload = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return []
+    candidates = payload.get(key)
+    if not isinstance(candidates, dict):
+        return []
+    executables: list[str] = []
+    for value in candidates.values():
+        if not isinstance(value, dict) or not isinstance(value.get("command"), str):
+            continue
+        try:
+            executable = shlex.split(value["command"])[0]
+        except ValueError:
+            continue
+        if executable:
+            executables.append(executable)
+    return sorted(set(executables))
+
+
+def nori_local_agent_executables(path: Path) -> list[str]:
+    """Read only `agents.distribution.local.command` values, excluding arguments and secrets."""
+    try:
+        text = path.read_text()
+    except OSError:
+        return []
+    commands: list[str] = []
+    in_local_distribution = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("["):
+            in_local_distribution = stripped == "[agents.distribution.local]"
+            continue
+        if in_local_distribution and stripped.startswith("command"):
+            match = re.match(r'command\s*=\s*["\']([^"\']+)', stripped)
+            if match:
+                commands.append(match.group(1))
+    return sorted(set(commands))
+
+
+def private_harness_inventory(baseline_path: Path | None = None) -> dict[str, Any]:
+    """Inventory explicit host evidence without traversing application directories or reading secrets."""
+    hosts: list[dict[str, Any]] = []
+    bindings: list[dict[str, Any]] = []
+    private_installations: list[dict[str, Any]] = []
+    unknown: list[dict[str, str]] = []
+
+    for host_id, name, bundle, config_path in PRIVATE_HARNESS_HOSTS:
+        bundle_exists = bundle.is_dir()
+        config_exists = config_path.exists()
+        host = {
+            "id": host_id,
+            "name": name,
+            "installed": bundle_exists,
+            "evidence_paths": [str(bundle)] + ([str(config_path)] if config_exists else []),
+            "evidence": "host-bundle-metadata" if bundle_exists else "not-found",
+            "confidence": "high" if bundle_exists else "none",
+        }
+        if bundle_exists:
+            host.update(app_bundle_metadata(bundle))
+        hosts.append(host)
+        bindings.append(
+            {
+                "client": host_id,
+                "binding_status": "unconfirmed",
+                "evidence_paths": [str(config_path)] if config_exists else [str(bundle)],
+                "evidence": "host-installed; no explicit harness executable read from safe configuration",
+                "confidence": "low" if bundle_exists else "none",
+            }
+        )
+        for executable_name in ("codex", "agent", "node", "acpx", "nori"):
+            candidate = bundle / "Contents/Resources" / executable_name
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                private_installations.append(
+                    {
+                        "host": host_id,
+                        "path": str(candidate),
+                        "resolved_path": resolve_path(str(candidate)),
+                        # Do not execute host-private binaries during inventory. A host
+                        # specific probe needs separate review before we can trust it.
+                        "version": None,
+                        "version_status": "not-probed",
+                        "source": "known-host-install-directory",
+                        "ownership_evidence": str(bundle),
+                        "confidence": "high",
+                    }
+                )
+
+    zed_config = Path.home() / ".config/zed/settings.json"
+    zed_commands = configured_executables(zed_config, "agent_servers")
+    if zed_commands:
+        binding = next((item for item in bindings if item["client"] == "zed"), None)
+        if binding:
+            binding.update(
+                {
+                    "binding_status": "confirmed",
+                    "executables": zed_commands,
+                    "evidence_paths": [str(zed_config)],
+                    "evidence": "explicit Zed agent_servers command configuration",
+                    "confidence": "high",
+                }
+            )
+
+    nori_config = Path.home() / ".nori/cli/config.toml"
+    nori_commands = nori_local_agent_executables(nori_config)
+    bindings.append(
+        {
+            "client": "nori",
+            "binding_status": "confirmed" if nori_commands else "unconfirmed",
+            "executables": nori_commands,
+            "evidence_paths": [str(nori_config)] if nori_config.exists() else [],
+            "evidence": "explicit Nori local-agent command configuration" if nori_commands else "no local-agent command configured",
+            "confidence": "high" if nori_commands else "low",
+        }
+    )
+    for client, command in (("acpx", "acpx"), ("codex-acp", "codex-acp")):
+        bindings.append(
+            {
+                "client": client,
+                "binding_status": "unconfirmed",
+                "evidence_paths": [shutil.which(command)] if shutil.which(command) else [],
+                "evidence": "client executable found, but no safe local harness binding configuration is known",
+                "confidence": "low" if shutil.which(command) else "none",
+            }
+        )
+
+    for host in hosts:
+        if host["installed"] and not any(entry.get("host") == host["id"] for entry in private_installations):
+            unknown.append(
+                {
+                    "subject": host["id"],
+                    "reason": "host is installed, but no private harness was found in the limited known paths",
+                }
+            )
+
+    result: dict[str, Any] = {
+        "inventory_version": 1,
+        "scope": "read-only explicit host metadata, known paths, and safe binding keys; no recursive app scan or secret output",
+        "default_entrypoints": [private_harness_entrypoint(command) for command in DEFAULT_HARNESS_ENTRYPOINTS],
+        "private_installations": private_installations,
+        "hosts": hosts,
+        "client_harness_bindings": bindings,
+        "unknown": unknown,
+        # A governance risk is only meaningful once a private binary is both
+        # discovered and proven to be the client's active binding. This limited
+        # inventory intentionally does not infer risks from host presence alone.
+        "governance_risks": [],
+    }
+    canonical = json.dumps(result, sort_keys=True, separators=(",", ":"))
+    result["fingerprint"] = hashlib.sha256(canonical.encode()).hexdigest()
+    if baseline_path:
+        try:
+            baseline = safe_dict(json.loads(baseline_path.read_text()))
+            baseline = safe_dict(baseline.get("private_harness_inventory", baseline))
+            baseline_fingerprint = baseline.get("fingerprint")
+            result["baseline"] = {
+                "path": str(baseline_path),
+                "status": "unchanged" if baseline_fingerprint == result["fingerprint"] else "changed",
+                "action": "review this explicit inventory manually" if baseline_fingerprint != result["fingerprint"] else None,
+            }
+        except (OSError, json.JSONDecodeError):
+            result["baseline"] = {"path": str(baseline_path), "status": "unavailable", "action": "review manually"}
+    return result
+
+
 def classify_brew_channel(brew_info: dict[str, Any] | None) -> str:
     brew_info = safe_dict(brew_info)
     if not brew_info:
@@ -310,7 +646,7 @@ def classify_brew_channel(brew_info: dict[str, Any] | None) -> str:
 
 def parse_version(text: str) -> str | None:
     match = SEMVER_RE.search(text)
-    return match.group(0) if match else None
+    return match.group(1) if match else None
 
 
 def version_key(version: str) -> tuple[int, int, int, int] | None:
@@ -674,7 +1010,10 @@ def channel_update_command(record: dict[str, Any], normalized_channel: str) -> s
             return f"brew upgrade --cask {package}"
         return f"brew upgrade {package}"
     if normalized_channel == "npm" and record.get("npm_package"):
-        return f"mise exec node -- npm install -g {record['npm_package']}@latest"
+        prefix = npm_command_prefix()
+        if prefix:
+            return f"{prefix} install -g {record['npm_package']}@latest"
+        return None
     if normalized_channel == "script":
         if tool == "kiro-cli":
             return "curl -fsSL https://cli.kiro.dev/install | bash"
@@ -699,7 +1038,8 @@ def native_update_command(tool: str, normalized_channel: str) -> str | None:
             binary = "kilo" if tool == "kilocode" else "opencode"
             command = f"{binary} upgrade --method {method}"
             if normalized_channel == "npm":
-                return f"mise exec node -- {command}"
+                prefix = node_execution_prefix()
+                return f"{prefix} {command}" if prefix else None
             return command
         return None
     commands = {
@@ -709,6 +1049,7 @@ def native_update_command(tool: str, normalized_channel: str) -> str | None:
         "cursor-agent": "agent update",
         "devin": "devin update",
         "droid": "droid update",
+        "fx": "fx upgrade",
         "grok": "grok update",
         "hermes": "hermes update",
     }
@@ -837,13 +1178,16 @@ def get_migration_command(record: dict[str, Any]) -> str | None:
     if tool == "kiro-cli":
         return "brew uninstall --cask kiro-cli && curl -fsSL https://cli.kiro.dev/install | bash"
     if tool == "codex":
-        return "mise exec node -- npm uninstall -g @openai/codex && curl -fsSL https://chatgpt.com/codex/install.sh | sh"
+        prefix = npm_command_prefix()
+        return f"{prefix} uninstall -g @openai/codex && curl -fsSL https://chatgpt.com/codex/install.sh | sh" if prefix else None
     if tool == "claude":
         return "brew uninstall --cask claude-code && curl -fsSL https://claude.ai/install.sh | bash"
     if tool == "amp":
-        return "mise exec node -- npm uninstall -g @ampcode/cli && curl -fsSL https://ampcode.com/install.sh | bash"
+        prefix = npm_command_prefix()
+        return f"{prefix} uninstall -g @ampcode/cli && curl -fsSL https://ampcode.com/install.sh | bash" if prefix else None
     if tool == "droid":
-        return "mise exec node -- npm uninstall -g droid && curl -fsSL https://app.factory.ai/cli | sh"
+        prefix = npm_command_prefix()
+        return f"{prefix} uninstall -g droid && curl -fsSL https://app.factory.ai/cli | sh" if prefix else None
     if tool == "uv":
         return "brew uninstall uv && curl -LsSf https://astral.sh/uv/install.sh | sh"
     return None
@@ -900,6 +1244,13 @@ def build_result(record: dict[str, Any], online: bool, with_release_notes: bool)
     resolved = resolve_path(path)
     detected_channel = detect_channel(path, resolved)
     container = binary_container(path, resolved)
+    source_details = source_checkout_details(path, safe_dict(record.get("source_checkout")))
+    if source_details.get("source_checkout_path"):
+        detected_channel = "source"
+    elif detected_channel == "app-bundle" and record.get("app_bundle_channel"):
+        detected_channel = str(record["app_bundle_channel"])
+    elif detected_channel == "unknown" and record.get("path_channel"):
+        detected_channel = str(record["path_channel"])
     if detected_channel == "unknown" and path.startswith(str(Path.home() / ".local/bin")):
         detected_channel = "script"
 
@@ -938,6 +1289,11 @@ def build_result(record: dict[str, Any], online: bool, with_release_notes: bool)
         latest_version = get_npm_latest(record["npm_package"], warnings)
 
     current_version, version_raw = get_current_version(command, record["version_args"])
+    if current_version is None and container == "app-bundle":
+        bundle_version = app_bundle_version(resolved)
+        if bundle_version:
+            current_version = bundle_version
+            version_raw = f"Bundle version: {bundle_version}"
 
     channel_notes = safe_dict(record.get("channel_notes"))
     notes = channel_notes.get(normalized_channel)
@@ -983,6 +1339,7 @@ def build_result(record: dict[str, Any], online: bool, with_release_notes: bool)
             result["release_summary"] = release_summary
     result["upgrade_candidate"] = is_upgrade_candidate(result)
     result.update(extra)
+    result.update(source_details)
     if warnings:
         result["audit_warnings"] = warnings
     return result
@@ -1085,11 +1442,13 @@ def main() -> int:
     parser.add_argument("--all", action="store_true", help="Show all catalog entries, including missing ones.")
     parser.add_argument("--offline", action="store_true", help="Skip network-backed latest version checks.")
     parser.add_argument("--check-node-runtime", action="store_true", help="Run the read-only mise Node runtime drift check instead of the catalog audit.")
+    parser.add_argument("--inventory-private-harnesses", action="store_true", help="Run a read-only inventory of explicit private Agent Harness evidence instead of the catalog audit.")
+    parser.add_argument("--private-harness-baseline", type=Path, help="Optional external JSON inventory baseline to compare read-only; this tool never writes it.")
     parser.add_argument("--tool", action="append", dest="tools", help="Only audit this tool id. Repeatable.")
     parser.add_argument("--with-release-notes", action="store_true", help="Fetch latest GitHub release notes and risk summary where possible.")
     parser.add_argument("--only-outdated", action="store_true", help="Only show installed tools that are upgrade candidates.")
     parser.add_argument("--only-nonstandard", action="store_true", help="Only show installed tools on nonstandard install channels.")
-    parser.add_argument("--only-class", choices=["agent-cli", "tooling-runtime"], help="Only show entries from a specific tooling class.")
+    parser.add_argument("--only-class", choices=["agent-cli", "tooling-runtime", "agent-operations"], help="Only show entries from a specific tooling class.")
     args = parser.parse_args()
 
     if args.check_node_runtime:
@@ -1102,6 +1461,23 @@ def main() -> int:
                 print(f"- {issue}")
             print(runtime_drift["gui_probe_required"])
         return 0 if runtime_drift["status"] == "pass" else 1
+
+    if args.inventory_private_harnesses:
+        inventory = private_harness_inventory(args.private_harness_baseline)
+        if args.json:
+            print(json.dumps({"private_harness_inventory": inventory}, indent=2, ensure_ascii=True))
+        else:
+            print("Private Agent Harness inventory (read-only)")
+            for entry in inventory["default_entrypoints"]:
+                print(f"- default {entry['command']}: {entry['resolved_path'] or 'not found'}")
+            print(f"- private installations: {len(inventory['private_installations'])}")
+            for binding in inventory["client_harness_bindings"]:
+                print(f"- {binding['client']}: {binding['binding_status']} ({binding['confidence']})")
+            if inventory["unknown"]:
+                print(f"- unconfirmed hosts: {', '.join(item['subject'] for item in inventory['unknown'])}")
+            if inventory.get("baseline", {}).get("status") == "changed":
+                print("- baseline: changed; review this explicit inventory manually")
+        return 0
 
     catalog = load_catalog()
     rows: list[dict[str, Any]] = []

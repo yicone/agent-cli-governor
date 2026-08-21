@@ -30,21 +30,29 @@
 - Claude Code
 - Gemini CLI
 - xAI Grok CLI
+- Nori CLI
+- Vercel fx
 - Kiro CLI
 - Devin CLI
 - Hermes CLI
 - Google Antigravity CLI (`agy`)
+- Google Jules CLI
 - Copilot CLI
 - OpenCode
-- Multica
 - Amp
 - Droid
 - Kilo Code
 - Cline
 
-`acpx` 会作为 `tooling-runtime` 单独跟踪：它是用于调用编码智能体的 ACP 客户端/运行时，而不是 Agent Provider CLI 本身。
+当前 `agent-operations` 条目包括 Multica、Claude Code Router（`ccr`）、Orca 和 CodexBar（`codexbar`）。
 
-目录也可保留少量与这套本地治理工作流相关的运行时工具（`tooling-runtime`），例如 `uv`。
+目录采用三个边界清晰的分类：
+
+- `agent-cli`：直接接受并执行编码 Agent 任务的 CLI，例如 Codex、Claude Code、Jules、Gemini。
+- `tooling-runtime`：协议适配器与执行支撑依赖，例如 ACPX、Codex ACP、Agent Browser、OpenSpec、9Router、`nmem`、`uv`。
+- `agent-operations`：编排多个 Agent、路由模型请求、管理工作区或展示用量的面向用户产品，例如 Multica、Claude Code Router、Orca、CodexBar。
+
+这样可以避免把编排产品错误地称为 Agent Provider 或 runtime 依赖。
 
 ## 要求
 
@@ -55,7 +63,7 @@
   - `npm`
   - 用于查询最新版本和发布说明的网络访问
 
-只有在通过 `--apply` 执行 npm 渠道的升级或迁移命令时才要求 `mise`。使用其他 Node 版本管理器的环境仍可审计和生成 dry-run 计划；但在尚未实现对应的运行时拓扑检查前，npm 计划会被有意限制为不可执行。
+npm 升级保护支持 `mise`、`nvm`、`fnm` 和 `asdf`。只有在验证当前 Node/npm 拓扑后，npm 计划才可执行。未识别的 Node 版本管理器仍可审计和生成 dry-run 计划，但 npm 升级会被有意限制为不可执行。
 
 CLI 工具当前不需要安装任何 Python 包。
 
@@ -72,8 +80,11 @@ python3 agent_cli_audit.py --only-outdated
 python3 agent_cli_audit.py --only-nonstandard
 python3 agent_cli_audit.py --only-class agent-cli
 python3 agent_cli_audit.py --only-class tooling-runtime
+python3 agent_cli_audit.py --only-class agent-operations
 python3 agent_cli_audit.py --with-release-notes
 python3 agent_cli_audit.py --check-node-runtime
+python3 agent_cli_audit.py --inventory-private-harnesses
+python3 agent_cli_audit.py --inventory-private-harnesses --private-harness-baseline ~/private-harness-inventory.json
 ```
 
 ### 生成升级计划
@@ -106,6 +117,7 @@ GUI 有意保持为既有 CLI 工具上的薄壳：
 
 - `Overview` 说明升级模型并展示静态示例数据
 - `Console` 运行本地审计并生成 dry-run 升级计划，绝不执行升级
+- 在线 GUI 审计默认启用 `Load release notes`，使 Release Risk 列在有可用 changelog 证据时显示风险。若只需更快地检查版本和渠道，可关闭该选项；离线模式不会获取发布说明。
 - `Generate Upgrade Plan` 会在可能时复用最近一次匹配的审计结果，避免第二次完整网络审计
 - 选定 CLI 的 `Details` 面板可按需加载发布说明，避免 changelog 获取阻塞主审计
 - `Plan scope` 仅控制生成的升级计划；`Installation status` 和 `Only outdated` 是结果表过滤器，统计卡片仍以未过滤审计结果为基线
@@ -130,7 +142,7 @@ GUI 有意保持为既有 CLI 工具上的薄壳：
 审计输出会区分：
 
 - `tooling_class`
-  `agent-cli` 与 `tooling-runtime`
+  `agent-cli`、`tooling-runtime` 或 `agent-operations`
 - `normalized_channel`
   例如 `script`、`npm`、`brew-core`、`brew-cask`、`desktop-install`
 - `binary_container`
@@ -149,20 +161,24 @@ GUI 有意保持为既有 CLI 工具上的薄壳：
 ## 说明
 
 - `--offline` 跳过依赖网络的最新版本查询，适合快速本地扫描。
-- `--check-node-runtime` 是对 `node`、`npm`、`npx`、`pnpm` 的只读 mise 运行时拓扑检查。它检测 PATH、符号链接、Node 可执行文件和 npm prefix 漂移，绝不修复环境；当 GUI 上下文重要时，须在实际 GUI shell 中单独运行。
+- `--check-node-runtime` 是对 `node`、`npm`、`npx`、`pnpm` 的只读 Node 运行时拓扑检查。它识别 `mise`、`nvm`、`fnm` 和 `asdf`，检测 PATH、Node 可执行文件和 npm prefix 漂移；仅对 `mise` 采用更严格的本地 wrapper 检查。它绝不修复环境。终端中执行只能验证该终端；需要验证 GUI 上下文时，应使用 GUI 的 **Run Node Runtime Check** 按钮，它会从 GUI server 进程中启动探测。
+- `--inventory-private-harnesses` 是与 Node 运行时检查分离的私有 Agent Harness 副本盘点。它会报告当前 shell 的默认入口、Zed、Devin Desktop、Multica、Codeg、Conductor 的固定证据路径，以及 Zed、Nori、ACPX、Codex ACP 可安全读取的显式绑定。它不会递归扫描 app bundle、执行宿主私有二进制、读取命令参数或密钥，也不会修改宿主。只有在确认 Client 实际绑定了某个私有副本，且存在明确策略冲突或已知风险时，才会报告治理风险；仅发现宿主时会标记为 `unconfirmed`。
+- `--private-harness-baseline PATH` 只比较用户显式提供的 JSON 报告，不会写入该文件。若要保留盘点结果，请放在仓库以外的私有位置；仓库和每周自动化都不会保存机器盘点结果。基线发生变化只提示人工复核，不会自动修复。
+- 如需主动建立这份外部基线，可由用户自行重定向 JSON 输出，例如：`python3 agent_cli_audit.py --inventory-private-harnesses --json > ~/private-harness-inventory.json`。
+- 每周升级自动化刻意只执行 `--check-node-runtime`；不会每周运行私有 Harness 盘点，也不会扫描桌面应用目录。
 - `--only-outdated` 仅显示既过期、又能在当前渠道升级的已安装工具。
 - `--only-nonstandard` 将报告限定为安装渠道不符合厂商支持或推荐渠道的工具。
-- `--only-class` 可将真正的 Agent CLI 与 `uv` 等相邻工具/运行时依赖分开。
+- `--only-class` 可将直接执行任务的 Agent CLI、运行时支撑工具和 Agent 运维产品分开。
 - `--with-release-notes` 会在可行时获取最新发布说明并生成简单风险摘要。直接支持 GitHub Releases，也会以启发式方式概括少量厂商托管的 changelog 页面。
 - 原生 self-update 不会自动优先于 npm 或 Homebrew。当 CLI 能明确保留其安装方式时，例如 Kilo Code 和 OpenCode 的 `--method`，计划会使用该原生命令。无法确认所有权影响时，计划保留现有 npm/Homebrew 渠道，仅将原生 self-update 作为信息性替代方案。
 - Claude Code 使用 `claude update`；其安装器可能迁移安装类型，因此它不是 Homebrew 管理安装的默认选择。Codex 的 script 安装使用官方 standalone 安装器；app-bundled Codex 则通过 ChatGPT.app 更新。
 - Antigravity CLI 使用 Google 的原生安装器安装至 `~/.local/bin/agy`，并在正常 CLI 使用期间运行已验证的后台 self-updater。审计会报告其官方 manifest 版本，但不会把交互式 `agy` 启动视为可由 `--apply` 自动执行的操作。
 - 工具目录位于 `agent_cli_catalog.json`。
-- 大多数条目为 `agent-cli`。当少量相邻工具对同一升级/治理工作流重要时，可作为 `tooling-runtime` 保留。
+- 大多数条目为 `agent-cli`。`tooling-runtime` 用于适配器和支撑依赖；`agent-operations` 用于协调一个或多个 Agent CLI、但本身并非 Agent 的产品。
 - 审计输出将选定的 `update_command` 与 `migration_command` 分开。`upgrade_guidance` 说明所选操作、它对安装所有权的影响，以及替代方案何时仅适用于审查或排障。
 - `agent_cli_upgrade.py` 只升级既过期、又处于已识别 supported 或 recommended 渠道的条目。
-- npm 渠道计划会通过 `mise exec node -- ...` 执行 npm。运行时漂移检查失败时，dry-run 仍会展示计划，但任何含 npm 渠道升级的 `--apply` 都会被阻止。
-- 这是一条有意设置的安全边界，而非认为只有 `mise` 才是有效的 Node 版本管理器。只有在为 `nvm`、`fnm`、`asdf` 等工具实现各自的运行时检查后，对应 npm 计划才应变为可执行。
+- npm 渠道计划会通过已验证的 Node 运行时执行：`mise` 使用 `mise exec node -- npm`；`nvm`、`fnm`、`asdf` 使用将已验证 Node bin 目录置于 `PATH` 首位的 path-bound npm 命令。运行时检查失败或不受支持时，dry-run 仍会展示计划，但任何含 npm 渠道升级的 `--apply` 都会被阻止。
+- 9Router 的 source checkout 检测会从兼容的本地 launcher 读取 checkout，并报告其与已配置 upstream ref 的本地 Git 关系。它绝不 fetch、rebase 或修改 checkout；若本地 upstream ref 过期，会明确报告。
 - 默认审计会省略未在 PATH 中发现的目录条目；使用 `--all` 才会列出它们。
 - `agent_cli_upgrade.py --offline` 复用离线审计模式，速度更快但计划信息较不完整。
 - `agent_cli_upgrade.py --only-class agent-cli` 将计划限制在与审计相同的类别边界。

@@ -26,6 +26,8 @@ def load_audit(*, offline: bool, tooling_class: str | None = None) -> list[dict[
     completed = subprocess.run(
         args,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         capture_output=True,
         check=True,
         timeout=75,
@@ -120,7 +122,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Safe wrapper for upgrading audited agent CLIs.")
     parser.add_argument("--json", action="store_true", help="Output the upgrade plan as JSON.")
     parser.add_argument("--offline", action="store_true", help="Use offline audit mode for faster but less complete planning.")
-    parser.add_argument("--only-class", choices=["agent-cli", "tooling-runtime"], help="Only plan entries from a specific tooling class.")
+    parser.add_argument("--only-class", choices=["agent-cli", "tooling-runtime", "agent-operations"], help="Only plan entries from a specific tooling class.")
     parser.add_argument("--tool", action="append", dest="tools", help="Tool id to upgrade. Repeatable.")
     parser.add_argument("--apply", action="store_true", help="Execute upgrades. Without this flag, only print the plan.")
     parser.add_argument("--yes", action="store_true", help="Skip the interactive confirmation when used with --apply.")
