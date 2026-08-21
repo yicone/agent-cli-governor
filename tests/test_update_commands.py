@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from agent_cli_audit import (
     binary_container,
+    check_node_runtime,
     detect_channel,
     get_latest_from_source,
     get_update_command,
@@ -24,13 +25,13 @@ class UpgradeGuidanceTests(unittest.TestCase):
 
         guidance = upgrade_guidance(record, "npm", "recommended", None)
 
-        self.assertEqual(guidance["command"], "npm install -g @github/copilot@latest")
+        self.assertEqual(guidance["command"], "mise exec node -- npm install -g @github/copilot@latest")
         self.assertEqual(guidance["kind"], "channel_update")
         self.assertEqual(guidance["alternatives"][0]["command"], "copilot update")
 
     def test_uses_explicit_method_for_kilo_and_opencode(self) -> None:
         cases = {
-            "kilocode": "kilo upgrade --method npm",
+            "kilocode": "mise exec node -- kilo upgrade --method npm",
             "opencode": "opencode upgrade --method brew",
         }
 
@@ -57,6 +58,23 @@ class UpgradeGuidanceTests(unittest.TestCase):
         with patch("agent_cli_audit.http_get_text", return_value='{"tag_name":"rust-v0.147.0"}'):
             self.assertEqual(get_latest_from_source(source), "0.147.0")
 
+    def test_parses_cursor_agent_latest_from_official_installer(self) -> None:
+        source = {
+            "type": "regex",
+            "url": "https://cursor.com/install",
+            "pattern": r'FINAL_DIR="\$HOME/\.local/share/cursor-agent/versions/([^"]+)"',
+        }
+
+        installer = 'FINAL_DIR="$HOME/.local/share/cursor-agent/versions/2026.08.04-aaa8809"'
+        with patch("agent_cli_audit.http_get_text", return_value=installer):
+            self.assertEqual(get_latest_from_source(source), "2026.08.04-aaa8809")
+
+    def test_cursor_agent_uses_native_script_update(self) -> None:
+        guidance = upgrade_guidance({"id": "cursor-agent"}, "script", "recommended", None)
+
+        self.assertEqual(guidance["kind"], "native_self_update")
+        self.assertEqual(guidance["command"], "agent update")
+
     def test_requires_manual_review_for_codex_app_bundle(self) -> None:
         guidance = upgrade_guidance(
             {"id": "codex"}, "app-bundle", "nonstandard", "a stale migration command"
@@ -81,7 +99,20 @@ class UpgradeGuidanceTests(unittest.TestCase):
             {"id": "gemini", "npm_package": "@google/gemini-cli"}, "npm"
         )
 
-        self.assertEqual(command, "npm install -g @google/gemini-cli@latest")
+        self.assertEqual(command, "mise exec node -- npm install -g @google/gemini-cli@latest")
+
+    def test_grok_uses_native_update_for_script_installs(self) -> None:
+        guidance = upgrade_guidance({"id": "grok"}, "script", "recommended", None)
+
+        self.assertEqual(guidance["kind"], "native_self_update")
+        self.assertEqual(guidance["command"], "grok update")
+
+    def test_node_runtime_check_reports_missing_mise(self) -> None:
+        with patch("agent_cli_audit.shutil.which", return_value=None):
+            result = check_node_runtime()
+
+        self.assertEqual(result["status"], "drift")
+        self.assertIn("mise is not available on PATH", result["issues"])
 
     def test_bridges_macos_proxy_to_child_process_environment(self) -> None:
         with patch("agent_cli_audit.urllib.request.getproxies", return_value={"http": "http://127.0.0.1:7890"}):

@@ -26,8 +26,10 @@
 主要关注以下 `agent-cli` 工具：
 
 - OpenAI Codex CLI
+- Cursor Agent CLI
 - Claude Code
 - Gemini CLI
+- xAI Grok CLI
 - Kiro CLI
 - Devin CLI
 - Hermes CLI
@@ -40,6 +42,8 @@
 - Kilo Code
 - Cline
 
+`acpx` 会作为 `tooling-runtime` 单独跟踪：它是用于调用编码智能体的 ACP 客户端/运行时，而不是 Agent Provider CLI 本身。
+
 目录也可保留少量与这套本地治理工作流相关的运行时工具（`tooling-runtime`），例如 `uv`。
 
 ## 要求
@@ -50,6 +54,8 @@
   - `brew`
   - `npm`
   - 用于查询最新版本和发布说明的网络访问
+
+只有在通过 `--apply` 执行 npm 渠道的升级或迁移命令时才要求 `mise`。使用其他 Node 版本管理器的环境仍可审计和生成 dry-run 计划；但在尚未实现对应的运行时拓扑检查前，npm 计划会被有意限制为不可执行。
 
 CLI 工具当前不需要安装任何 Python 包。
 
@@ -67,6 +73,7 @@ python3 agent_cli_audit.py --only-nonstandard
 python3 agent_cli_audit.py --only-class agent-cli
 python3 agent_cli_audit.py --only-class tooling-runtime
 python3 agent_cli_audit.py --with-release-notes
+python3 agent_cli_audit.py --check-node-runtime
 ```
 
 ### 生成升级计划
@@ -142,6 +149,7 @@ GUI 有意保持为既有 CLI 工具上的薄壳：
 ## 说明
 
 - `--offline` 跳过依赖网络的最新版本查询，适合快速本地扫描。
+- `--check-node-runtime` 是对 `node`、`npm`、`npx`、`pnpm` 的只读 mise 运行时拓扑检查。它检测 PATH、符号链接、Node 可执行文件和 npm prefix 漂移，绝不修复环境；当 GUI 上下文重要时，须在实际 GUI shell 中单独运行。
 - `--only-outdated` 仅显示既过期、又能在当前渠道升级的已安装工具。
 - `--only-nonstandard` 将报告限定为安装渠道不符合厂商支持或推荐渠道的工具。
 - `--only-class` 可将真正的 Agent CLI 与 `uv` 等相邻工具/运行时依赖分开。
@@ -153,6 +161,9 @@ GUI 有意保持为既有 CLI 工具上的薄壳：
 - 大多数条目为 `agent-cli`。当少量相邻工具对同一升级/治理工作流重要时，可作为 `tooling-runtime` 保留。
 - 审计输出将选定的 `update_command` 与 `migration_command` 分开。`upgrade_guidance` 说明所选操作、它对安装所有权的影响，以及替代方案何时仅适用于审查或排障。
 - `agent_cli_upgrade.py` 只升级既过期、又处于已识别 supported 或 recommended 渠道的条目。
+- npm 渠道计划会通过 `mise exec node -- ...` 执行 npm。运行时漂移检查失败时，dry-run 仍会展示计划，但任何含 npm 渠道升级的 `--apply` 都会被阻止。
+- 这是一条有意设置的安全边界，而非认为只有 `mise` 才是有效的 Node 版本管理器。只有在为 `nvm`、`fnm`、`asdf` 等工具实现各自的运行时检查后，对应 npm 计划才应变为可执行。
+- 默认审计会省略未在 PATH 中发现的目录条目；使用 `--all` 才会列出它们。
 - `agent_cli_upgrade.py --offline` 复用离线审计模式，速度更快但计划信息较不完整。
 - `agent_cli_upgrade.py --only-class agent-cli` 将计划限制在与审计相同的类别边界。
 - `agent_cli_upgrade.py --channel recommended` 仅生成厂商推荐安装渠道的计划。

@@ -26,8 +26,10 @@ Audit and govern locally installed agent CLIs and adjacent runtime tooling.
 The main focus is `agent-cli` tools such as:
 
 - OpenAI Codex CLI
+- Cursor Agent CLI
 - Claude Code
 - Gemini CLI
+- xAI Grok CLI
 - Kiro CLI
 - Devin CLI
 - Hermes CLI
@@ -40,6 +42,8 @@ The main focus is `agent-cli` tools such as:
 - Kilo Code
 - Cline
 
+`acpx` is tracked separately as `tooling-runtime`: it is an ACP client/runtime for invoking coding agents, not an agent provider CLI itself.
+
 The catalog can also retain a small number of adjacent `tooling-runtime` dependencies, such as `uv`, when they matter to the same local governance workflow.
 
 ## Requirements
@@ -50,6 +54,8 @@ The catalog can also retain a small number of adjacent `tooling-runtime` depende
   - `brew`
   - `npm`
   - network access for latest-version and release-note checks
+
+`mise` is required only to execute npm-channel upgrade or migration commands with `--apply`. Other Node version managers remain usable for auditing and dry-run planning, but their runtime topology is intentionally not accepted as an executable npm-upgrade baseline yet.
 
 No Python package installation is currently required for the CLI tools.
 
@@ -67,6 +73,7 @@ python3 agent_cli_audit.py --only-nonstandard
 python3 agent_cli_audit.py --only-class agent-cli
 python3 agent_cli_audit.py --only-class tooling-runtime
 python3 agent_cli_audit.py --with-release-notes
+python3 agent_cli_audit.py --check-node-runtime
 ```
 
 ### Upgrade Planning
@@ -144,6 +151,7 @@ The audit output distinguishes:
 ## Notes
 
 - `--offline` skips network-backed latest-version checks and is better for quick local scans.
+- `--check-node-runtime` is a read-only mise runtime topology check for `node`, `npm`, `npx`, and `pnpm`. It detects PATH, symlink, Node executable, and npm-prefix drift; it never repairs the environment. Run it from the actual GUI shell separately when GUI context matters.
 - `--only-outdated` only shows installed tools that are both outdated and upgradeable on the current channel.
 - `--only-nonstandard` narrows the report to tools whose install channel does not match the vendor's supported or recommended channels.
 - `--only-class` lets you separate true Agent CLIs from adjacent tooling/runtime dependencies such as `uv`.
@@ -155,6 +163,9 @@ The audit output distinguishes:
 - Most entries are `agent-cli`. A small number of adjacent tools can be retained as `tooling-runtime` when they matter to the same upgrade/governance workflow.
 - The audit output separates the selected `update_command` from `migration_command`. `upgrade_guidance` explains which action is selected, how it affects installation ownership, and when an alternative is only for review or troubleshooting.
 - `agent_cli_upgrade.py` only upgrades entries that are both outdated and on a recognized supported or recommended channel.
+- npm-channel plans run npm through `mise exec node -- ...`. A failed runtime-drift check leaves dry runs visible but blocks `--apply` for plans containing npm-channel upgrades.
+- This is a deliberate safety boundary, not a claim that `mise` is the only valid Node version manager. Support for `nvm`, `fnm`, `asdf`, and similar tools requires an explicit provider-specific runtime check before their npm plans can become executable.
+- Missing catalog entries are omitted from the default audit and listed only with `--all`.
 - `agent_cli_upgrade.py --offline` reuses offline audit mode for faster but less complete upgrade planning.
 - `agent_cli_upgrade.py --only-class agent-cli` limits planning to the same class boundary used by the audit.
 - `agent_cli_upgrade.py --channel recommended` narrows the plan to vendor-recommended install channels only.

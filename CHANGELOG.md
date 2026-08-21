@@ -6,6 +6,16 @@ The format is intentionally simple and human-maintained.
 
 ## Unreleased
 
+### Added
+
+- Cursor Agent CLI (`agent`) is now tracked as an official script-installed CLI with installer-backed version checks and `agent update` guidance
+- xAI Grok CLI and ACPX are now tracked; Grok is an `agent-cli`, while ACPX is a separate `tooling-runtime`
+- `--check-node-runtime` adds a read-only mise Node runtime drift check for npm upgrade safety
+
+### Changed
+
+- npm upgrade commands now run through `mise exec node -- ...`; a failed runtime drift check warns during dry runs and blocks npm-channel `--apply` operations without modifying the environment
+
 ## [0.2.0] - 2026-08-08
 
 ### Added

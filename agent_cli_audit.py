@@ -46,6 +46,7 @@ HTTP_TIMEOUT_SECONDS = 8
 HTTP_ATTEMPTS = 2
 PACKAGE_MANAGER_TIMEOUT_SECONDS = 12
 AUDIT_WORKERS = 4
+NODE_RUNTIME_COMMANDS = ("node", "npm", "npx", "pnpm")
 MEDIUM_RISK_TERMS = [
     "hook",
     "plugin",
@@ -122,6 +123,115 @@ def system_proxy_env() -> dict[str, str]:
     if https_proxy:
         proxy_env.update({"HTTPS_PROXY": https_proxy, "https_proxy": https_proxy})
     return proxy_env
+
+
+def command_output(args: list[str]) -> tuple[str | None, str | None]:
+    try:
+        completed = run(args, timeout=15)
+    except Exception as exc:
+        return None, str(exc)
+    if completed.returncode != 0:
+        return None, (completed.stderr or completed.stdout or "command failed").strip()
+    return completed.stdout.strip(), None
+
+
+def check_node_runtime() -> dict[str, Any]:
+    """Read-only verification that npm tooling is owned by the active mise Node."""
+    result: dict[str, Any] = {
+        "status": "pass",
+        "mise_paths": {},
+        "command_paths": {},
+        "local_entries": {},
+        "versions": {},
+        "issues": [],
+        "gui_probe_required": (
+            "Run `python3 agent_cli_audit.py --check-node-runtime` from the actual GUI shell "
+            "to verify that GUI process context; this probe cannot validate another application's PATH."
+        ),
+    }
+
+    if not shutil.which("mise"):
+        result["status"] = "drift"
+        result["issues"].append("mise is not available on PATH")
+        return result
+
+    mise_paths: dict[str, str] = {}
+    for command in NODE_RUNTIME_COMMANDS:
+        output, error = command_output(["mise", "which", command])
+        if not output:
+            result["status"] = "drift"
+            result["issues"].append(f"mise which {command} failed: {error or 'no path returned'}")
+            continue
+        mise_path = output.splitlines()[0]
+        mise_paths[command] = mise_path
+        result["mise_paths"][command] = mise_path
+
+        local_entry = Path.home() / ".local/bin" / command
+        local_data: dict[str, Any] = {"path": str(local_entry), "exists": local_entry.exists() or local_entry.is_symlink()}
+        local_wrapper_matches = False
+        if local_entry.is_symlink():
+            local_data["is_symlink"] = True
+            local_data["target"] = os.readlink(local_entry)
+            result["status"] = "drift"
+            result["issues"].append(f"{local_entry} is a symlink; generic mise entry policy requires a wrapper")
+        else:
+            local_data["is_symlink"] = False
+            if local_entry.is_file():
+                try:
+                    wrapper = local_entry.read_text()
+                    wrapper_match = re.search(r"^exec\s+([^\s]+)", wrapper, re.MULTILINE)
+                    if wrapper_match:
+                        wrapper_target = wrapper_match.group(1)
+                        local_data["wrapper_target"] = wrapper_target
+                        local_wrapper_matches = resolve_path(wrapper_target) == resolve_path(mise_path)
+                        local_data["matches_mise"] = local_wrapper_matches
+                except OSError:
+                    pass
+        result["local_entries"][command] = local_data
+
+        command_path = shutil.which(command)
+        result["command_paths"][command] = command_path
+        if not command_path:
+            result["status"] = "drift"
+            result["issues"].append(f"command -v {command} found no executable")
+            continue
+        is_active_local_wrapper = Path(command_path) == local_entry and local_wrapper_matches
+        if resolve_path(command_path) != resolve_path(mise_path) and not is_active_local_wrapper:
+            result["status"] = "drift"
+            result["issues"].append(
+                f"{command} resolves to {resolve_path(command_path)}, expected {resolve_path(mise_path)} from mise"
+            )
+
+        version, version_error = command_output([command_path, "--version"])
+        if version:
+            result["versions"][command] = version.splitlines()[0]
+        elif version_error:
+            result["issues"].append(f"{command} --version failed: {version_error}")
+            result["status"] = "drift"
+
+    node_path = mise_paths.get("node")
+    if node_path:
+        exec_path, exec_error = command_output([node_path, "-p", "process.execPath"])
+        result["node_exec_path"] = exec_path
+        if not exec_path or resolve_path(exec_path) != resolve_path(node_path):
+            result["status"] = "drift"
+            result["issues"].append(
+                f"node process.execPath is {exec_path or exec_error or 'unknown'}, expected {resolve_path(node_path)}"
+            )
+
+    npm_path = mise_paths.get("npm")
+    if npm_path and node_path:
+        prefix, prefix_error = command_output([npm_path, "config", "get", "prefix"])
+        result["npm_prefix"] = prefix
+        expected_prefix = str(Path(resolve_path(node_path)).parent.parent)
+        result["expected_npm_prefix"] = expected_prefix
+        if not prefix or resolve_path(prefix) != resolve_path(expected_prefix):
+            result["status"] = "drift"
+            result["issues"].append(
+                f"npm prefix is {prefix or prefix_error or 'unknown'}, expected {expected_prefix} for active mise Node"
+            )
+
+    return result
 
 
 def load_catalog() -> list[dict[str, Any]]:
@@ -564,7 +674,7 @@ def channel_update_command(record: dict[str, Any], normalized_channel: str) -> s
             return f"brew upgrade --cask {package}"
         return f"brew upgrade {package}"
     if normalized_channel == "npm" and record.get("npm_package"):
-        return f"npm install -g {record['npm_package']}@latest"
+        return f"mise exec node -- npm install -g {record['npm_package']}@latest"
     if normalized_channel == "script":
         if tool == "kiro-cli":
             return "curl -fsSL https://cli.kiro.dev/install | bash"
@@ -587,14 +697,19 @@ def native_update_command(tool: str, normalized_channel: str) -> str | None:
         method = method_map.get(normalized_channel)
         if method:
             binary = "kilo" if tool == "kilocode" else "opencode"
-            return f"{binary} upgrade --method {method}"
+            command = f"{binary} upgrade --method {method}"
+            if normalized_channel == "npm":
+                return f"mise exec node -- {command}"
+            return command
         return None
     commands = {
         "amp": "amp update",
         "claude": "claude update",
         "copilot": "copilot update",
+        "cursor-agent": "agent update",
         "devin": "devin update",
         "droid": "droid update",
+        "grok": "grok update",
         "hermes": "hermes update",
     }
     return commands.get(tool)
@@ -722,13 +837,13 @@ def get_migration_command(record: dict[str, Any]) -> str | None:
     if tool == "kiro-cli":
         return "brew uninstall --cask kiro-cli && curl -fsSL https://cli.kiro.dev/install | bash"
     if tool == "codex":
-        return "npm uninstall -g @openai/codex && curl -fsSL https://chatgpt.com/codex/install.sh | sh"
+        return "mise exec node -- npm uninstall -g @openai/codex && curl -fsSL https://chatgpt.com/codex/install.sh | sh"
     if tool == "claude":
         return "brew uninstall --cask claude-code && curl -fsSL https://claude.ai/install.sh | bash"
     if tool == "amp":
-        return "npm uninstall -g @ampcode/cli && curl -fsSL https://ampcode.com/install.sh | bash"
+        return "mise exec node -- npm uninstall -g @ampcode/cli && curl -fsSL https://ampcode.com/install.sh | bash"
     if tool == "droid":
-        return "npm uninstall -g droid && curl -fsSL https://app.factory.ai/cli | sh"
+        return "mise exec node -- npm uninstall -g droid && curl -fsSL https://app.factory.ai/cli | sh"
     if tool == "uv":
         return "brew uninstall uv && curl -LsSf https://astral.sh/uv/install.sh | sh"
     return None
@@ -969,12 +1084,24 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="Output JSON.")
     parser.add_argument("--all", action="store_true", help="Show all catalog entries, including missing ones.")
     parser.add_argument("--offline", action="store_true", help="Skip network-backed latest version checks.")
+    parser.add_argument("--check-node-runtime", action="store_true", help="Run the read-only mise Node runtime drift check instead of the catalog audit.")
     parser.add_argument("--tool", action="append", dest="tools", help="Only audit this tool id. Repeatable.")
     parser.add_argument("--with-release-notes", action="store_true", help="Fetch latest GitHub release notes and risk summary where possible.")
     parser.add_argument("--only-outdated", action="store_true", help="Only show installed tools that are upgrade candidates.")
     parser.add_argument("--only-nonstandard", action="store_true", help="Only show installed tools on nonstandard install channels.")
     parser.add_argument("--only-class", choices=["agent-cli", "tooling-runtime"], help="Only show entries from a specific tooling class.")
     args = parser.parse_args()
+
+    if args.check_node_runtime:
+        runtime_drift = check_node_runtime()
+        if args.json:
+            print(json.dumps({"runtime_drift": runtime_drift}, indent=2, ensure_ascii=True))
+        else:
+            print(f"Node runtime drift check: {runtime_drift['status']}")
+            for issue in runtime_drift["issues"]:
+                print(f"- {issue}")
+            print(runtime_drift["gui_probe_required"])
+        return 0 if runtime_drift["status"] == "pass" else 1
 
     catalog = load_catalog()
     rows: list[dict[str, Any]] = []

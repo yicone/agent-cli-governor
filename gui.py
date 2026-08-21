@@ -12,7 +12,7 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from agent_cli_upgrade import build_plan
+from agent_cli_upgrade import build_plan, npm_runtime_status
 from nicegui import run, ui
 
 
@@ -36,7 +36,9 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def run_json_command(args: list[str], timeout_seconds: int) -> dict[str, Any]:
+def run_json_command(
+    args: list[str], timeout_seconds: int, *, allow_nonzero: bool = False
+) -> dict[str, Any]:
     process = subprocess.Popen(
         args,
         text=True,
@@ -64,7 +66,7 @@ def run_json_command(args: list[str], timeout_seconds: int) -> dict[str, Any]:
             f"Command exceeded {timeout_seconds}s and was stopped. {stderr.strip()}"
         )
     completed = subprocess.CompletedProcess(args, process.returncode, stdout, stderr)
-    if completed.returncode != 0:
+    if completed.returncode != 0 and not allow_nonzero:
         raise RuntimeError(completed.stderr.strip() or completed.stdout.strip() or "Command failed")
     return json.loads(completed.stdout)
 
@@ -174,6 +176,7 @@ class AppState:
         self.last_error = ""
         self.audit_errors: list[dict[str, str]] = []
         self.audit_context: tuple[str, bool] | None = None
+        self.runtime_drift: dict[str, Any] | None = None
 
     def log(self, message: str) -> None:
         self.activity.append(message)
@@ -606,6 +609,9 @@ async def run_plan(activity_col: ui.log, status_label: ui.label, spinner: ui.spi
             payload = await asyncio.to_thread(run_json_command, build_plan_command(), PLAN_TIMEOUT_SECONDS)
             state.plan_rows = payload["plan"]
             activity_col.push("Upgrade plan ran a fresh audit because no matching audit result was available.")
+        state.runtime_drift = await asyncio.to_thread(npm_runtime_status, state.plan_rows)
+        if state.runtime_drift and state.runtime_drift.get("status") != "pass":
+            activity_col.push("WARNING: npm-channel upgrades are not executable until the Node runtime drift check passes.")
         render_plan_summary(plan_container, state.plan_rows)
         activity_col.push(f"Upgrade plan completed with {len(state.plan_rows)} candidate(s).")
         status_label.set_text(f"Upgrade plan completed with {len(state.plan_rows)} candidate(s).")
@@ -619,6 +625,46 @@ async def run_plan(activity_col: ui.log, status_label: ui.label, spinner: ui.spi
         activity_col.push(f"Upgrade plan failed: {exc}")
         status_label.set_text("Upgrade plan failed.")
         ui.notify(f"Upgrade plan failed: {exc}", type="negative")
+    finally:
+        spinner.visible = False
+        state.is_running = False
+
+
+async def run_node_runtime_check(activity_col: ui.log, status_label: ui.label, spinner: ui.spinner, runtime_label: ui.label) -> None:
+    if state.is_running:
+        ui.notify("A task is already running", type="warning")
+        return
+    state.is_running = True
+    try:
+        activity_col.push("Checking Node runtime drift from the GUI process context...")
+        status_label.set_text("Checking Node runtime drift...")
+        spinner.visible = True
+        payload = await asyncio.to_thread(
+            run_json_command,
+            ["python3", str(AUDIT), "--json", "--check-node-runtime"],
+            30,
+            allow_nonzero=True,
+        )
+        runtime_drift = payload.get("runtime_drift")
+        if not isinstance(runtime_drift, dict):
+            raise RuntimeError("Runtime drift payload was missing")
+        state.runtime_drift = runtime_drift
+        runtime_status = runtime_drift.get("status", "unknown")
+        runtime_label.set_text(f"Node runtime: {runtime_status}")
+        if runtime_status == "pass":
+            activity_col.push("Node runtime drift check passed in the GUI process context.")
+            status_label.set_text("Node runtime check passed.")
+            ui.notify("Node runtime check passed", type="positive")
+        else:
+            for issue in runtime_drift.get("issues", []):
+                activity_col.push(f"Runtime drift: {issue}")
+            activity_col.push("Diagnostic: python3 agent_cli_audit.py --check-node-runtime")
+            status_label.set_text("Node runtime drift detected.")
+            ui.notify("Node runtime drift detected", type="warning")
+    except Exception as exc:
+        activity_col.push(f"Node runtime check failed: {exc}")
+        status_label.set_text("Node runtime check failed.")
+        ui.notify(f"Node runtime check failed: {exc}", type="negative")
     finally:
         spinner.visible = False
         state.is_running = False
@@ -753,6 +799,7 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
                     table_col = ui.column().classes("w-full")
                     activity_log = ui.log().classes("w-full h-32")
                     status_label = ui.label("Idle").classes("text-sm text-gray-600 mt-2")
+                    runtime_label = ui.label("Node runtime: not checked").classes("text-sm text-gray-600")
                     spinner = ui.spinner(size="md")
                     spinner.visible = False
 
@@ -777,6 +824,9 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
                             sync_state()
                             await run_plan(activity_log, status_label, spinner, plan_content)
 
+                        async def handle_runtime_check() -> None:
+                            await run_node_runtime_check(activity_log, status_label, spinner, runtime_label)
+
                         async def details_release_notes_handler() -> None:
                             sync_state()
                             await run_release_notes(table_col, details_content, activity_log, status_label, spinner)
@@ -784,6 +834,7 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
                         globals()["details_release_notes_handler"] = details_release_notes_handler
                         ui.button("Run Audit", on_click=handle_audit)
                         ui.button("Generate Upgrade Plan", on_click=handle_plan)
+                        ui.button("Check Node Runtime", on_click=handle_runtime_check).props("outline")
                         ui.button("Refresh", on_click=handle_audit)
                         ui.button("Copy Summary", on_click=lambda: ui.run_javascript(f"navigator.clipboard.writeText({json.dumps({'audit': state.audit_command, 'plan': state.plan_command})!r})"))
 

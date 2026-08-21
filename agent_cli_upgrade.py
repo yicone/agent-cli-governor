@@ -9,6 +9,8 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from agent_cli_audit import check_node_runtime
+
 
 ROOT = Path(__file__).resolve().parent
 AUDIT = ROOT / "agent_cli_audit.py"
@@ -101,6 +103,19 @@ def run_shell(command: str) -> int:
     return completed.returncode
 
 
+def npm_runtime_status(plan: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not any(item.get("normalized_channel") == "npm" for item in plan):
+        return None
+    return check_node_runtime()
+
+
+def print_runtime_warning(runtime_drift: dict[str, Any]) -> None:
+    print(f"Node runtime drift check: {runtime_drift.get('status', 'unknown')}")
+    for issue in runtime_drift.get("issues", []):
+        print(f"- {issue}")
+    print("Diagnostic: python3 agent_cli_audit.py --check-node-runtime")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Safe wrapper for upgrading audited agent CLIs.")
     parser.add_argument("--json", action="store_true", help="Output the upgrade plan as JSON.")
@@ -117,16 +132,17 @@ def main() -> int:
     channel = "recommended" if args.recommended_only else args.channel
     items = load_audit(offline=args.offline, tooling_class=args.only_class)
     plan = build_plan(items, selected if selected else None, channel)
+    runtime_drift = npm_runtime_status(plan)
 
     if not plan:
         if args.json:
-            print(json.dumps({"channel": channel, "offline": args.offline, "plan": []}, indent=2))
+            print(json.dumps({"channel": channel, "offline": args.offline, "plan": [], "runtime_drift": runtime_drift}, indent=2))
             return 0
         print("No upgrade candidates matched the current filters.")
         return 0
 
     if args.json:
-        print(json.dumps({"channel": channel, "offline": args.offline, "plan": plan}, indent=2))
+        print(json.dumps({"channel": channel, "offline": args.offline, "plan": plan, "runtime_drift": runtime_drift}, indent=2))
         return 0
 
     print("Upgrade plan:")
@@ -146,9 +162,18 @@ def main() -> int:
                 print(f"  alternative ({alternative.get('title', 'Alternative')}): {alternative.get('command', '')}")
 
     if not args.apply:
+        if runtime_drift and runtime_drift.get("status") != "pass":
+            print()
+            print("WARNING: npm-channel upgrades are not executable until the Node runtime drift check passes.")
+            print_runtime_warning(runtime_drift)
         print()
         print("Dry run only. Re-run with --apply to execute.")
         return 0
+
+    if runtime_drift and runtime_drift.get("status") != "pass":
+        print("Refusing npm-channel upgrades because the Node runtime drift check failed.")
+        print_runtime_warning(runtime_drift)
+        return 1
 
     if not args.yes:
         reply = input("Proceed with these upgrades? [y/N] ").strip().lower()

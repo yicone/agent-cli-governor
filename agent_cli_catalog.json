@@ -42,6 +42,41 @@
       }
     },
     {
+      "id": "cursor-agent",
+      "name": "Cursor Agent CLI",
+      "tooling_class": "agent-cli",
+      "commands": ["agent"],
+      "version_args": [["--version"]],
+      "latest_source": {
+        "type": "regex",
+        "url": "https://cursor.com/install",
+        "pattern": "FINAL_DIR=\\\"\\$HOME/\\.local/share/cursor-agent/versions/([^\\\"]+)\\\""
+      },
+      "official_install_url": "https://cursor.com/docs/cli/overview",
+      "official_release_notes_url": "https://cursor.com/docs/cli/overview",
+      "recommended_channels": ["script"],
+      "supported_channels": ["script"],
+      "channel_notes": {
+        "script": "Cursor documents the official installer and native self-update flow for the standalone CLI."
+      }
+    },
+    {
+      "id": "grok",
+      "name": "xAI Grok CLI",
+      "tooling_class": "agent-cli",
+      "commands": ["grok"],
+      "version_args": [["--version"], ["version"]],
+      "npm_package": "@xai-official/grok",
+      "official_install_url": "https://x.ai/news/grok-build-cli",
+      "official_release_notes_url": "https://github.com/xai-org/grok-build/releases",
+      "recommended_channels": ["script"],
+      "supported_channels": ["script", "npm"],
+      "channel_notes": {
+        "script": "xAI documents the official installer and Grok's native update command.",
+        "npm": "xAI documents @xai-official/grok as an alternative installation path; npm updates run through mise."
+      }
+    },
+    {
       "id": "claude",
       "name": "Anthropic Claude Code",
       "tooling_class": "agent-cli",
@@ -277,6 +312,21 @@
       "supported_channels": ["npm"],
       "channel_notes": {
         "npm": "Official docs lead with global npm installation."
+      }
+    },
+    {
+      "id": "acpx",
+      "name": "ACPX",
+      "tooling_class": "tooling-runtime",
+      "commands": ["acpx"],
+      "version_args": [["--version"], ["version"]],
+      "npm_package": "acpx",
+      "official_install_url": "https://github.com/openclaw/acpx#install",
+      "official_release_notes_url": "https://github.com/openclaw/acpx/releases",
+      "recommended_channels": ["npm"],
+      "supported_channels": ["npm"],
+      "channel_notes": {
+        "npm": "ACPX documents global npm installation; npm updates run through mise."
       }
     },
     {
