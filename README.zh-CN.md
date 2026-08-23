@@ -112,12 +112,14 @@ python3 gui.py --reload
 ```
 
 GUI 入口已针对 NiceGUI 多进程热重载处理；下游 fork 应使用以上命令，而不要把 `ui.run()` 放在普通的 `if __name__ == "__main__":` 保护中。
+即使从其他工作目录调用启动器，热重载也只监视本项目目录内的 `*.py` 和 `*.json` 文件。
 
 GUI 有意保持为既有 CLI 工具上的薄壳：
 
 - `Overview` 说明升级模型并展示静态示例数据
 - `Console` 运行本地审计并生成 dry-run 升级计划，绝不执行升级
 - 在线 GUI 审计默认启用 `Load release notes`，使 Release Risk 列在有可用 changelog 证据时显示风险。若只需更快地检查版本和渠道，可关闭该选项；离线模式不会获取发布说明。
+- 审计表会显示产品 Logo、当前/最新版本及其上游发布时间。日期仅在 GitHub release tag 或 npm 版本时间戳能精确匹配时显示；`Unknown` 表示没有可靠上游日期，绝不表示本机安装时间。紧凑的证据横幅会统计受上游查询失败影响的工具数；悬停 `Unknown` 日期、Latest 或 Release Risk 可区分“查询失败”和“没有精确上游记录”。
 - `Generate Upgrade Plan` 会在可能时复用最近一次匹配的审计结果，避免第二次完整网络审计
 - 选定 CLI 的 `Details` 面板可按需加载发布说明，避免 changelog 获取阻塞主审计
 - `Plan scope` 仅控制生成的升级计划；`Installation status` 和 `Only outdated` 是结果表过滤器，统计卡片仍以未过滤审计结果为基线
@@ -127,7 +129,7 @@ GUI 有意保持为既有 CLI 工具上的薄壳：
 - 本地版本和包管理器探测在隔离进程组中运行，超时的启动器不会遗留本机子进程
 - Python HTTP 查询采用默认 `urllib` 代理解析：`HTTP_PROXY`/`HTTPS_PROXY` 优先；未设置时使用 macOS 系统代理，并将解析后的代理传递给 `npm` 和 Homebrew 查询
 - 长时间运行的子进程有明确超时，并会被终止而非留在后台
-- 第一版不执行真实升级
+- GUI 绝不执行升级；显式 CLI `--apply` 仍由独立保护机制约束，并且必须获得用户授权
 
 运行 `python3 gui.py` 即可。如果 `8080` 已被占用，可选择其他端口，例如 `python3 gui.py --port 8081`。
 
@@ -159,6 +161,10 @@ GUI 有意保持为既有 CLI 工具上的薄壳：
   当前安装渠道不再被优先建议时的迁移路径
 - `release_risk`
   从最新发布说明推断的轻量升级期变更风险摘要。它表示采用最新上游版本可能带来的行为变化或升级风险，而不是停留在当前版本的风险。
+- `audit_metadata`
+  目录条目数、已选条目数与目录 revision，可用于诊断 GUI 或 JSON 审计实际使用的策略目录。
+- `logo_url`、`current_version_published_at`、`latest_version_published_at`
+  产品 Logo 与精确上游发布时间的可选展示证据。缺失发布日期会明确保持为不可用，绝不替换为本机安装时间。
 
 ## 说明
 
@@ -180,7 +186,7 @@ GUI 有意保持为既有 CLI 工具上的薄壳：
 - 审计输出将选定的 `update_command` 与 `migration_command` 分开。`upgrade_guidance` 说明所选操作、它对安装所有权的影响，以及替代方案何时仅适用于审查或排障。
 - `agent_cli_upgrade.py` 只升级既过期、又处于已识别 supported 或 recommended 渠道的条目。
 - npm 渠道计划会通过已验证的 Node 运行时执行：`mise` 使用 `mise exec node -- npm`；`nvm`、`fnm`、`asdf` 使用将已验证 Node bin 目录置于 `PATH` 首位的 path-bound npm 命令。运行时检查失败或不受支持时，dry-run 仍会展示计划，但任何含 npm 渠道升级的 `--apply` 都会被阻止。
-- 9Router 的 source checkout 检测会从兼容的本地 launcher 读取 checkout，并报告其与已配置 upstream ref 的本地 Git 关系。它绝不 fetch、rebase 或修改 checkout；若本地 upstream ref 过期，会明确报告。
+- source-linked 目录条目（当前包括 9Router 与 Claude Code Router）会从兼容的本地 launcher 读取 checkout，并报告其与已配置 upstream ref 的本地 Git 关系。它们绝不 fetch、rebase 或修改 checkout；若本地 upstream ref 过期，会明确报告。
 - 默认审计会省略未在 PATH 中发现的目录条目；使用 `--all` 才会列出它们。
 - `agent_cli_upgrade.py --offline` 复用离线审计模式，速度更快但计划信息较不完整。
 - `agent_cli_upgrade.py --only-class agent-cli` 将计划限制在与审计相同的类别边界。

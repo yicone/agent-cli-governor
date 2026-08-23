@@ -114,12 +114,15 @@ python3 gui.py --reload
 The GUI entrypoint is reload-safe for NiceGUI multiprocessing, so use the
 command above instead of wrapping `ui.run()` behind a plain `if __name__ == "__main__":`
 pattern in downstream forks.
+Reload watches only this project directory's `*.py` and `*.json` files, even when
+the launcher is invoked from another working directory.
 
 The GUI is intentionally a thin shell over the existing CLI tools:
 
 - `Overview` explains the upgrade model and shows static example data
 - `Console` runs a local audit and generates a dry-run upgrade plan; it never executes upgrades
 - `Load release notes` is enabled by default for online GUI audits so the Release Risk column can show available changelog evidence. Disable it for a faster version/channel-only audit; offline mode never fetches notes.
+- The audit table shows a product logo, current/latest versions, and their upstream publication dates. Dates appear only when an exact GitHub release tag or npm version timestamp matches; `Unknown` means no reliable upstream date was available, never the local installation time. A compact evidence banner counts tools affected by failed upstream lookups, and hovering an `Unknown` date, latest version, or release-risk value explains whether the lookup failed or no exact upstream record matched.
 - `Generate Upgrade Plan` reuses the latest matching audit result when possible, avoiding a second full network audit
 - The selected CLI's `Details` panel can load release notes on demand, so changelog retrieval does not block the main audit
 - `Plan scope` controls generated upgrade plans; `Installation status` and `Only outdated` are results-table filters, while the summary cards remain an unfiltered audit baseline
@@ -129,7 +132,7 @@ The GUI is intentionally a thin shell over the existing CLI tools:
 - local version and package-manager probes run in isolated process groups, so a timed-out launcher cannot leave a native child process behind
 - Python HTTP lookups use the default `urllib` proxy resolution: `HTTP_PROXY`/`HTTPS_PROXY` take precedence, with macOS system proxy settings used when those variables are absent; that resolved proxy is also passed to `npm` and Homebrew lookups
 - long-running subprocesses have a bounded timeout and are stopped on timeout rather than left running in the background
-- the first version does not execute real upgrades
+- the GUI never executes upgrades; explicit CLI `--apply` remains separately guarded and requires user authorization
 
 Run it with `python3 gui.py`. If port `8080` is already in use, choose another port, for example `python3 gui.py --port 8081`.
 
@@ -161,6 +164,10 @@ The audit output distinguishes:
   A suggested migration path when the current install channel is no longer preferred
 - `release_risk`
   A lightweight summary of upgrade-time change risk inferred from the latest release notes. It signals how risky or behavior-changing the newest upstream release may be to adopt, not the risk of staying on the current version.
+- `audit_metadata`
+  Catalog entry and selection counts plus a catalog revision, used to diagnose which policy catalog produced a GUI or JSON audit.
+- `logo_url`, `current_version_published_at`, `latest_version_published_at`
+  Optional presentation evidence for the product logo and exact upstream publication dates. Missing publication dates are intentionally represented as unavailable rather than as local installation times.
 
 ## Notes
 
@@ -182,7 +189,7 @@ The audit output distinguishes:
 - The audit output separates the selected `update_command` from `migration_command`. `upgrade_guidance` explains which action is selected, how it affects installation ownership, and when an alternative is only for review or troubleshooting.
 - `agent_cli_upgrade.py` only upgrades entries that are both outdated and on a recognized supported or recommended channel.
 - npm-channel plans run through the validated Node runtime provider: `mise` uses `mise exec node -- npm`, while `nvm`, `fnm`, and `asdf` use a path-bound npm command with the validated Node bin directory first in `PATH`. A failed or unsupported runtime check leaves dry runs visible but blocks `--apply` for plans containing npm-channel upgrades.
-- 9Router source-checkout detection reads a compatible local launcher and reports the existing local Git relation to its configured upstream ref. It never fetches, rebases, or modifies the checkout; a stale upstream ref is explicitly reported.
+- Source-linked catalog entries, currently including 9Router and Claude Code Router, can read a compatible local launcher and report the existing local Git relation to their configured upstream ref. They never fetch, rebase, or modify the checkout; a stale upstream ref is explicitly reported.
 - Missing catalog entries are omitted from the default audit and listed only with `--all`.
 - `agent_cli_upgrade.py --offline` reuses offline audit mode for faster but less complete upgrade planning.
 - `agent_cli_upgrade.py --only-class agent-cli` limits planning to the same class boundary used by the audit.

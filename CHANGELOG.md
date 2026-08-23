@@ -8,6 +8,9 @@ The format is intentionally simple and human-maintained.
 
 ### Added
 
+- GUI audit rows now show product logos and exact upstream publication dates for current and latest versions when GitHub or npm evidence is available; unavailable evidence is shown as `Unknown`
+- GUI evidence degradation is now explicit: a compact banner counts tools affected by failed upstream lookups, and `Unknown` latest/date/risk cells explain whether the lookup failed or no exact upstream record matched
+- GUI documentation and screenshots now reflect product logos, publication-date evidence, and the Force refresh audit workflow
 - `agent-operations` is a separate catalog class for agent orchestration, routing, workspace, and observability products; Multica, Claude Code Router, Orca, and CodexBar are tracked in this class
 - Google Jules CLI, Agent Browser, and OpenSpec are now tracked from their installed npm distributions
 - Linked source checkouts can report their local Git relation through a resolved executable path without fetching or modifying the checkout
@@ -21,6 +24,8 @@ The format is intentionally simple and human-maintained.
 
 ### Changed
 
+- NiceGUI `--reload` now watches only the project directory, preventing unrelated user-home changes from repeatedly restarting the GUI
+- Optional wrapper, launcher, and private-Harness config reads now tolerate invalid UTF-8 instead of dropping an audit entry or breaking the Node runtime JSON probe
 - 9Router and Nowledge Mem CLI are classified as `agent-operations`: they operate an agent routing or knowledge-management plane, rather than providing a protocol or execution runtime
 - App-bundled CLIs can fall back to the bundle version when their command does not expose a parseable version
 - npm upgrade commands now run through `mise exec node -- ...`; a failed runtime drift check warns during dry runs and blocks npm-channel `--apply` operations without modifying the environment
@@ -31,6 +36,7 @@ The format is intentionally simple and human-maintained.
 - Overview now explains the three tool roles plus runtime-safety and private-Harness boundaries, matching the current governance model
 - JSON HTTP lookups replace malformed UTF-8 bytes before parsing, preventing one malformed upstream response from emitting repeated item warnings
 - Class filtering now happens before probes begin, preventing warnings from unrelated tools and exposing catalog revision metadata for audit diagnostics
+- Hermes latest-version detection now extracts the product version from release names when release tags carry a separate build identifier
 
 ## [0.2.0] - 2026-08-08
 
