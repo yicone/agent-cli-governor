@@ -119,7 +119,7 @@ GUI 有意保持为既有 CLI 工具上的薄壳：
 - `Overview` 说明升级模型并展示静态示例数据
 - `Console` 运行本地审计并生成 dry-run 升级计划，绝不执行升级
 - 在线 GUI 审计默认启用 `Load release notes`，使 Release Risk 列在有可用 changelog 证据时显示风险。若只需更快地检查版本和渠道，可关闭该选项；离线模式不会获取发布说明。
-- 审计表会显示产品 Logo、当前/最新版本及其上游发布时间。日期仅在 GitHub release tag 或 npm 版本时间戳能精确匹配时显示；`Unknown` 表示没有可靠上游日期，绝不表示本机安装时间。紧凑的证据横幅会统计受上游查询失败影响的工具数；悬停 `Unknown` 日期、Latest 或 Release Risk 可区分“查询失败”和“没有精确上游记录”。
+- 审计表会显示产品 Logo、当前/最新版本及其上游发布时间。日期仅在存在精确上游证据时显示；`Unknown` 绝不表示本机安装时间。紧凑的证据横幅会区分上游查询失败和非失败的来源缺口；悬停 `Unknown` 日期、Latest 或 Release Risk 可查看字段级原因。`Evidence Gaps` 卡片会把来源覆盖、版本命名空间和日期解析限制与 `Audit Warnings` 分开展示。
 - `Generate Upgrade Plan` 会在可能时复用最近一次匹配的审计结果，避免第二次完整网络审计
 - 选定 CLI 的 `Details` 面板可按需加载发布说明，避免 changelog 获取阻塞主审计
 - `Plan scope` 仅控制生成的升级计划；`Installation status` 和 `Only outdated` 是结果表过滤器，统计卡片仍以未过滤审计结果为基线

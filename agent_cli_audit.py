@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import datetime
 import hashlib
 import json
 import os
@@ -25,6 +26,7 @@ CATALOG_PATH = ROOT / "agent_cli_catalog.json"
 SEMVER_RE = re.compile(r"\bv?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)\b")
 GITHUB_RELEASES_RE = re.compile(r"^https://github\.com/([^/]+)/([^/]+)/releases/?$")
 HTML_TAG_RE = re.compile(r"<[^>]+>")
+HUMAN_DATE_RE = re.compile(r"\b([A-Z][a-z]+\s+\d{1,2},\s+\d{4})\b")
 HIGH_RISK_TERMS = [
     "breaking",
     "deprecated",
@@ -57,6 +59,35 @@ PRIVATE_HARNESS_HOSTS = (
     ("codeg", "Codeg", Path("/Applications/codeg.app"), Path.home() / ".codeg"),
     ("conductor", "Conductor", Path("/Applications/Conductor.app"), Path.home() / ".conductor/settings.toml"),
 )
+TOOL_ICONS = {
+    "codex": "smart_toy",
+    "claude": "psychology",
+    "gemini": "auto_awesome",
+    "copilot": "assistant",
+    "cursor-agent": "mouse",
+    "opencode": "code",
+    "acpx": "extension",
+    "codex-acp": "extension",
+    "agent-browser": "travel_explore",
+    "9router": "hub",
+    "nmem": "memory",
+}
+TOOL_LOGO_URLS = {
+    "claude": "https://raw.githubusercontent.com/stablyai/orca/main/docs/assets/claude-logo.svg",
+    "codex": "https://www.google.com/s2/favicons?domain=openai.com&sz=64",
+    "grok": "https://www.google.com/s2/favicons?domain=x.ai&sz=64",
+    "cursor-agent": "https://www.google.com/s2/favicons?domain=cursor.com&sz=64",
+    "copilot": "https://www.google.com/s2/favicons?domain=github.com&sz=64",
+    "opencode": "https://www.google.com/s2/favicons?domain=opencode.ai&sz=64",
+    "amp": "https://www.google.com/s2/favicons?domain=ampcode.com&sz=64",
+    "antigravity": "https://www.google.com/s2/favicons?domain=antigravity.google&sz=64",
+    "hermes": "https://www.google.com/s2/favicons?domain=nousresearch.com&sz=64",
+    "devin": "https://www.google.com/s2/favicons?domain=devin.ai&sz=64",
+    "droid": "https://raw.githubusercontent.com/stablyai/orca/main/docs/assets/droid-logo.svg",
+    "kilocode": "https://raw.githubusercontent.com/Kilo-Org/kilocode/main/packages/kilo-vscode/assets/icons/kilo-light.svg",
+    "kiro-cli": "https://www.google.com/s2/favicons?domain=kiro.dev&sz=64",
+    "orca": "https://raw.githubusercontent.com/stablyai/orca/main/resources/build/icon.png",
+}
 MEDIUM_RISK_TERMS = [
     "hook",
     "plugin",
@@ -147,6 +178,14 @@ def command_output(args: list[str]) -> tuple[str | None, str | None]:
     return completed.stdout.strip(), None
 
 
+def read_optional_utf8(path: Path) -> str | None:
+    """Read an optional text file without allowing malformed local data to abort an audit."""
+    try:
+        return path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None
+
+
 def command_runtime_path(command_path: str | None) -> str | None:
     """Resolve the target of a simple local wrapper without executing shell code."""
     if not command_path:
@@ -155,12 +194,11 @@ def command_runtime_path(command_path: str | None) -> str | None:
     if path.is_symlink():
         return resolve_path(command_path)
     if path.is_file():
-        try:
-            match = re.search(r"^exec\s+([^\s]+)", path.read_text(), re.MULTILINE)
+        wrapper = read_optional_utf8(path)
+        if wrapper is not None:
+            match = re.search(r"^exec\s+([^\s]+)", wrapper, re.MULTILINE)
             if match:
                 return resolve_path(match.group(1))
-        except OSError:
-            pass
     return resolve_path(command_path)
 
 
@@ -281,15 +319,14 @@ def check_node_runtime() -> dict[str, Any]:
         else:
             local_data["is_symlink"] = False
             if local_entry.is_file():
-                try:
-                    wrapper_match = re.search(r"^exec\s+([^\s]+)", local_entry.read_text(), re.MULTILINE)
+                wrapper = read_optional_utf8(local_entry)
+                if wrapper is not None:
+                    wrapper_match = re.search(r"^exec\s+([^\s]+)", wrapper, re.MULTILINE)
                     if wrapper_match:
                         wrapper_target = wrapper_match.group(1)
                         local_data["wrapper_target"] = wrapper_target
                         local_wrapper_matches = resolve_path(wrapper_target) == resolve_path(mise_path)
                         local_data["matches_mise"] = local_wrapper_matches
-                except OSError:
-                    pass
         result["local_entries"][command] = local_data
         is_active_local_wrapper = Path(command_path) == local_entry and local_wrapper_matches
         if resolve_path(command_path) != resolve_path(mise_path) and not is_active_local_wrapper:
@@ -337,6 +374,30 @@ def safe_list(value: Any) -> list[Any]:
 
 def tooling_class(record: dict[str, Any]) -> str:
     return record.get("tooling_class", "agent-cli")
+
+
+def tool_icon(record: dict[str, Any]) -> str:
+    """Return a stable Material Symbol for a catalog entry without fetching a logo."""
+    icon = TOOL_ICONS.get(str(record.get("id", "")))
+    if icon:
+        return icon
+    return {
+        "agent-cli": "terminal",
+        "tooling-runtime": "extension",
+        "agent-operations": "hub",
+    }.get(tooling_class(record), "terminal")
+
+
+def tool_logo_url(record: dict[str, Any]) -> str | None:
+    """Return a vetted product logo, falling back to the product site's favicon."""
+    icon = TOOL_LOGO_URLS.get(str(record.get("id", "")))
+    if icon:
+        return icon
+    install_url = record.get("official_install_url")
+    host = urllib.parse.urlparse(install_url).hostname if isinstance(install_url, str) else None
+    if not host:
+        return None
+    return f"https://www.google.com/s2/favicons?domain={host}&sz=64"
 
 
 def select_catalog_records(
@@ -407,9 +468,8 @@ def source_checkout_details(path: str, source: dict[str, Any]) -> dict[str, Any]
     """Read linked-checkout metadata without fetching or modifying Git state."""
     pattern = source.get("launcher_pattern")
     if pattern:
-        try:
-            launcher = Path(path).read_text()
-        except OSError:
+        launcher = read_optional_utf8(Path(path))
+        if launcher is None:
             return {}
         match = re.search(str(pattern), launcher)
         if not match:
@@ -475,9 +535,12 @@ def app_bundle_metadata(bundle: Path) -> dict[str, Any]:
 
 def configured_executables(path: Path, key: str) -> list[str]:
     """Extract only executable tokens from an explicit config key; never emit arguments."""
+    text = read_optional_utf8(path)
+    if text is None:
+        return []
     try:
-        payload = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
+        payload = json.loads(text)
+    except json.JSONDecodeError:
         return []
     candidates = payload.get(key)
     if not isinstance(candidates, dict):
@@ -497,9 +560,8 @@ def configured_executables(path: Path, key: str) -> list[str]:
 
 def nori_local_agent_executables(path: Path) -> list[str]:
     """Read only `agents.distribution.local.command` values, excluding arguments and secrets."""
-    try:
-        text = path.read_text()
-    except OSError:
+    text = read_optional_utf8(path)
+    if text is None:
         return []
     commands: list[str] = []
     in_local_distribution = False
@@ -875,6 +937,147 @@ def parse_github_repo_from_releases(url: str) -> tuple[str, str] | None:
     return match.group(1), match.group(2)
 
 
+def normalized_release_version(version: Any) -> str | None:
+    if not isinstance(version, str):
+        return None
+    normalized = version.strip().lower()
+    if normalized.startswith("rust-v"):
+        normalized = normalized[6:]
+    elif normalized.startswith("v"):
+        normalized = normalized[1:]
+    return normalized or None
+
+
+def get_github_release_for_version(
+    release_notes_url: str,
+    version: str | None,
+    warnings: list[str] | None = None,
+) -> dict[str, Any] | None:
+    """Return a GitHub release only when its tag exactly identifies the requested version."""
+    repo = parse_github_repo_from_releases(release_notes_url)
+    target = normalized_release_version(version)
+    if not repo or not target:
+        return None
+    owner, name = repo
+    payload = http_get_json(f"https://api.github.com/repos/{owner}/{name}/releases?per_page=100", warnings)
+    for release in safe_list(payload):
+        if not isinstance(release, dict):
+            continue
+        summary = summarize_release_notes(release)
+        if release_matches_version(summary, target):
+            return summary
+    return None
+
+
+def get_npm_version_published_at(
+    package: str,
+    version: str | None,
+    warnings: list[str] | None = None,
+) -> str | None:
+    """Read the npm registry timestamp for one exact published package version."""
+    if not version:
+        return None
+    payload = http_get_json(f"https://registry.npmjs.org/{urllib.parse.quote(package, safe='@')}", warnings)
+    timestamps = safe_dict(safe_dict(payload).get("time"))
+    published_at = timestamps.get(version)
+    return str(published_at) if isinstance(published_at, str) else None
+
+
+def evidence_gaps_for_result(record: dict[str, Any], result: dict[str, Any]) -> list[dict[str, str]]:
+    """Describe absent online evidence without confusing it with an audit failure."""
+    gaps: list[dict[str, str]] = []
+    latest_version = result.get("latest_version")
+    current_version = result.get("current_version")
+    release_summary = safe_dict(result.get("release_summary"))
+    release_url = str(record.get("official_release_notes_url") or "")
+    is_github_releases = parse_github_repo_from_releases(release_url) is not None
+    has_npm_timestamp_source = bool(record.get("npm_package"))
+    has_custom_release_source = bool(record.get("custom_release_notes"))
+
+    def add(field: str, reason_code: str, reason: str) -> None:
+        gaps.append({"field": field, "reason_code": reason_code, "reason": reason})
+
+    if not result.get("current_version_published_at") and current_version:
+        if has_npm_timestamp_source:
+            add(
+                "current_version_published_at",
+                "npm_timestamp_not_found",
+                f"The npm registry has no publication timestamp exactly matching current version {current_version}.",
+            )
+        elif is_github_releases:
+            add(
+                "current_version_published_at",
+                "current_release_tag_not_found",
+                f"No GitHub release tag exactly matches current version {current_version}.",
+            )
+        else:
+            add(
+                "current_version_published_at",
+                "current_date_source_unavailable",
+                f"No exact publication-date source is configured for current version {current_version}.",
+            )
+
+    if not result.get("latest_version"):
+        add(
+            "latest_version",
+            "latest_version_unresolved",
+            "No latest version was resolved from the configured upstream sources.",
+        )
+    elif not result.get("latest_version_published_at"):
+        summary_version = release_summary.get("version")
+        if summary_version and release_matches_version(release_summary, latest_version):
+            add(
+                "latest_version_published_at",
+                "matched_release_date_unparsed",
+                f"A release record matches latest version {latest_version}, but it provides no machine-readable publication date.",
+            )
+        elif summary_version:
+            add(
+                "latest_version_published_at",
+                "latest_version_namespace_mismatch",
+                f"Latest version {latest_version} does not exactly match the release record version {summary_version}.",
+            )
+        elif has_npm_timestamp_source:
+            add(
+                "latest_version_published_at",
+                "npm_timestamp_not_found",
+                f"The npm registry has no publication timestamp exactly matching latest version {latest_version}.",
+            )
+        elif is_github_releases:
+            add(
+                "latest_version_published_at",
+                "latest_release_tag_not_found",
+                f"No GitHub release tag exactly matches latest version {latest_version}.",
+            )
+        else:
+            add(
+                "latest_version_published_at",
+                "latest_date_source_unavailable",
+                f"No exact publication-date source is configured for latest version {latest_version}.",
+            )
+
+    if "release_summary" not in result:
+        if is_github_releases:
+            add(
+                "release_risk",
+                "github_release_summary_unavailable",
+                "The GitHub release feed did not provide a usable latest release summary.",
+            )
+        elif has_custom_release_source:
+            add(
+                "release_risk",
+                "release_notes_unparsed",
+                "No usable release-note entry was extracted from the configured changelog source.",
+            )
+        else:
+            add(
+                "release_risk",
+                "release_notes_source_unavailable",
+                "No structured release-notes source is configured for release-risk assessment.",
+            )
+    return gaps
+
+
 def summarize_release_notes(payload: dict[str, Any]) -> dict[str, Any]:
     payload = safe_dict(payload)
     body = (payload.get("body") or "").strip()
@@ -903,6 +1106,7 @@ def summarize_release_notes(payload: dict[str, Any]) -> dict[str, Any]:
 
     return {
         "version": payload.get("tag_name") or name,
+        "name": name,
         "published_at": published,
         "url": html_url,
         "risk_level": risk,
@@ -916,6 +1120,29 @@ def strip_html(raw: str) -> str:
     text = text.replace("&nbsp;", " ").replace("&amp;", "&")
     text = re.sub(r"\s+", " ", text)
     return text.strip()
+
+
+def publication_date_from_text(value: str) -> str | None:
+    """Normalize an explicitly published calendar date without inventing a time of day."""
+    match = HUMAN_DATE_RE.search(value)
+    if not match:
+        return None
+    try:
+        return datetime.datetime.strptime(match.group(1), "%B %d, %Y").strftime("%Y-%m-%dT00:00:00Z")
+    except ValueError:
+        return None
+
+
+def release_matches_version(summary: dict[str, Any], version: str | None) -> bool:
+    target = normalized_release_version(version)
+    if not target:
+        return False
+    if normalized_release_version(summary.get("version")) == target:
+        return True
+    name = summary.get("name")
+    if not isinstance(name, str):
+        return False
+    return bool(re.search(rf"(?<![0-9A-Za-z.-])v?{re.escape(target)}(?![0-9A-Za-z.-])", name, re.IGNORECASE))
 
 
 def summarize_text_release(version: str, text: str, url: str, note: str | None = None) -> dict[str, Any]:
@@ -951,19 +1178,41 @@ def summarize_text_release(version: str, text: str, url: str, note: str | None =
     return result
 
 
-def get_custom_release_summary(config: dict[str, Any], latest_version: str | None) -> dict[str, Any] | None:
+def get_custom_release_summary(
+    config: dict[str, Any],
+    latest_version: str | None,
+    warnings: list[str] | None = None,
+) -> dict[str, Any] | None:
     config = safe_dict(config)
     source_type = config.get("type")
     url = config.get("url")
     if not source_type or not url:
         return None
 
-    raw = http_get_text(url)
+    raw = http_get_text(url, warnings)
     if not raw:
         return None
     text = strip_html(raw)
     if not text:
         return None
+
+    if source_type == "html-update-label":
+        if not latest_version:
+            return None
+        for match in re.finditer(r"<Update\s+([^>]*)>", raw, re.IGNORECASE):
+            attributes = match.group(1)
+            label_match = re.search(r'\blabel=["\']([^"\']+)["\']', attributes, re.IGNORECASE)
+            if not label_match or normalized_release_version(label_match.group(1)) != normalized_release_version(latest_version):
+                continue
+            next_match = re.search(r"<Update\s+", raw[match.end():], re.IGNORECASE)
+            end = match.end() + next_match.start() if next_match else len(raw)
+            summary = summarize_text_release(latest_version, strip_html(raw[match.start():end]), url)
+            description_match = re.search(r'\bdescription=["\']([^"\']+)["\']', attributes, re.IGNORECASE)
+            if description_match:
+                published_at = publication_date_from_text(description_match.group(1))
+                if published_at:
+                    summary["published_at"] = published_at
+            return summary
 
     if source_type == "html-version-match":
         if not latest_version:
@@ -1004,12 +1253,12 @@ def get_custom_release_summary(config: dict[str, Any], latest_version: str | Non
     return None
 
 
-def get_release_summary(release_notes_url: str) -> dict[str, Any] | None:
+def get_release_summary(release_notes_url: str, warnings: list[str] | None = None) -> dict[str, Any] | None:
     repo = parse_github_repo_from_releases(release_notes_url)
     if not repo:
         return None
     owner, name = repo
-    payload = http_get_json(f"https://api.github.com/repos/{owner}/{name}/releases/latest")
+    payload = http_get_json(f"https://api.github.com/repos/{owner}/{name}/releases/latest", warnings)
     if not isinstance(payload, dict) or not payload:
         return None
     return summarize_release_notes(payload)
@@ -1324,6 +1573,8 @@ def build_result(record: dict[str, Any], online: bool, with_release_notes: bool)
     result = {
         "id": record["id"],
         "name": record["name"],
+        "tool_icon": tool_icon(record),
+        "logo_url": tool_logo_url(record),
         "tooling_class": tooling_class(record),
         "command": command,
         "path": path,
@@ -1345,11 +1596,30 @@ def build_result(record: dict[str, Any], online: bool, with_release_notes: bool)
         "notes": notes,
     }
     if online and with_release_notes:
-        release_summary = get_release_summary(record["official_release_notes_url"])
+        release_summary = get_release_summary(record["official_release_notes_url"], warnings)
         if not release_summary and record.get("custom_release_notes"):
-            release_summary = get_custom_release_summary(record["custom_release_notes"], latest_version)
+            release_summary = get_custom_release_summary(record["custom_release_notes"], latest_version, warnings)
         if release_summary:
             result["release_summary"] = release_summary
+            if release_matches_version(release_summary, latest_version):
+                published_at = release_summary.get("published_at")
+                if isinstance(published_at, str):
+                    result["latest_version_published_at"] = published_at
+        current_release = get_github_release_for_version(record["official_release_notes_url"], current_version, warnings)
+        if not current_release and record.get("custom_release_notes"):
+            current_release = get_custom_release_summary(record["custom_release_notes"], current_version, warnings)
+        if current_release:
+            published_at = current_release.get("published_at")
+            if isinstance(published_at, str):
+                result["current_version_published_at"] = published_at
+        if record.get("npm_package"):
+            package = str(record["npm_package"])
+            result.setdefault("current_version_published_at", get_npm_version_published_at(package, current_version, warnings))
+            result.setdefault("latest_version_published_at", get_npm_version_published_at(package, latest_version, warnings))
+        if not warnings:
+            evidence_gaps = evidence_gaps_for_result(record, result)
+            if evidence_gaps:
+                result["evidence_gaps"] = evidence_gaps
     result["upgrade_candidate"] = is_upgrade_candidate(result)
     result.update(extra)
     result.update(source_details)

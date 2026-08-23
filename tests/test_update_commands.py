@@ -10,10 +10,14 @@ from unittest.mock import patch
 from agent_cli_audit import (
     app_bundle_version,
     binary_container,
+    build_result,
     check_node_runtime,
+    command_runtime_path,
     configured_executables,
     detect_channel,
+    evidence_gaps_for_result,
     get_latest_from_source,
+    get_custom_release_summary,
     get_update_command,
     http_get_json,
     load_catalog,
@@ -22,10 +26,13 @@ from agent_cli_audit import (
     nori_local_agent_executables,
     private_harness_inventory,
     release_platform,
+    release_matches_version,
     run,
     select_catalog_records,
     source_checkout_details,
     system_proxy_env,
+    tool_icon,
+    tool_logo_url,
     upgrade_guidance,
 )
 
@@ -62,6 +69,21 @@ class UpgradeGuidanceTests(unittest.TestCase):
         self.assertNotIn("acpx", {record["id"] for record in selected})
         self.assertIn("grok", {record["id"] for record in selected})
         self.assertIn("jules", {record["id"] for record in selected})
+
+    def test_assigns_a_stable_material_icon_to_each_tool(self) -> None:
+        self.assertEqual(tool_icon({"id": "codex", "tooling_class": "agent-cli"}), "smart_toy")
+        self.assertEqual(tool_icon({"id": "acpx", "tooling_class": "tooling-runtime"}), "extension")
+        self.assertEqual(tool_icon({"id": "unknown", "tooling_class": "agent-operations"}), "hub")
+
+    def test_prefers_orca_brand_logo_urls_and_falls_back_to_official_favicon(self) -> None:
+        self.assertEqual(
+            tool_logo_url({"id": "claude", "official_install_url": "https://github.com/anthropics/claude-code"}),
+            "https://raw.githubusercontent.com/stablyai/orca/main/docs/assets/claude-logo.svg",
+        )
+        self.assertEqual(
+            tool_logo_url({"id": "unknown", "official_install_url": "https://example.test/install"}),
+            "https://www.google.com/s2/favicons?domain=example.test&sz=64",
+        )
 
     def test_uses_channel_upgrade_when_native_ownership_is_unverified(self) -> None:
         record = {"id": "copilot", "npm_package": "@github/copilot"}
@@ -163,6 +185,125 @@ class UpgradeGuidanceTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "drift")
         self.assertIn("node and npm must both be available on PATH", result["issues"])
+
+    def test_binary_runtime_shim_is_not_decoded_as_a_wrapper(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            shim = Path(temporary) / "node"
+            shim.write_bytes(b"\xcf\xfa\xed\xfe")
+
+            self.assertEqual(command_runtime_path(str(shim)), str(shim.resolve()))
+
+    def test_binary_launcher_skips_source_checkout_without_dropping_audit_item(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            launcher = Path(temporary) / "agent"
+            launcher.write_bytes(b"\xcf\xfa\xed\xfe")
+            record = {
+                "id": "binary-agent",
+                "name": "Binary Agent",
+                "tooling_class": "agent-cli",
+                "commands": ["agent"],
+                "version_args": [["--version"]],
+                "official_install_url": "https://example.test/install",
+                "official_release_notes_url": "https://example.test/releases",
+                "recommended_channels": ["script"],
+                "supported_channels": ["script"],
+                "source_checkout": {"launcher_pattern": r'exec "([^"]+)"'},
+            }
+
+            with (
+                patch("agent_cli_audit.first_existing_command", return_value=("agent", str(launcher))),
+                patch("agent_cli_audit.get_current_version", return_value=("1.0.0", "1.0.0")),
+            ):
+                result = build_result(record, online=False, with_release_notes=False)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(result["id"], "binary-agent")
+        self.assertNotIn("source_checkout_path", result)
+
+    def test_audit_attaches_only_exact_version_publication_dates(self) -> None:
+        record = {
+            "id": "dated-agent",
+            "name": "Dated Agent",
+            "tooling_class": "agent-cli",
+            "commands": ["dated-agent"],
+            "version_args": [["--version"]],
+            "official_install_url": "https://example.test/install",
+            "official_release_notes_url": "https://github.com/example/dated-agent/releases",
+            "recommended_channels": ["script"],
+            "supported_channels": ["script"],
+            "latest_source": {"type": "text", "url": "https://example.test/latest"},
+        }
+        latest_summary = {"version": "v2.0.0", "published_at": "2026-08-23T12:00:00Z"}
+        current_summary = {"version": "v1.0.0", "published_at": "2026-01-02T03:04:05Z"}
+
+        with (
+            patch("agent_cli_audit.first_existing_command", return_value=("dated-agent", "/tmp/dated-agent")),
+            patch("agent_cli_audit.get_current_version", return_value=("1.0.0", "1.0.0")),
+            patch("agent_cli_audit.get_latest_from_source", return_value="2.0.0"),
+            patch("agent_cli_audit.get_release_summary", return_value=latest_summary),
+            patch("agent_cli_audit.get_github_release_for_version", return_value=current_summary),
+        ):
+            result = build_result(record, online=True, with_release_notes=True)
+
+        self.assertEqual(result["current_version_published_at"], current_summary["published_at"])
+        self.assertEqual(result["latest_version_published_at"], latest_summary["published_at"])
+        self.assertNotIn("evidence_gaps", result)
+
+    def test_evidence_gaps_distinguish_unparsed_date_from_version_mismatch(self) -> None:
+        record = {
+            "official_release_notes_url": "https://example.test/changelog",
+            "custom_release_notes": {"type": "html-version-match"},
+        }
+
+        matched_without_date = evidence_gaps_for_result(
+            record,
+            {
+                "current_version": "2.19.1",
+                "latest_version": "2.19.1",
+                "release_summary": {"version": "2.19.1", "risk_level": "medium"},
+            },
+        )
+        mismatch = evidence_gaps_for_result(
+            record,
+            {
+                "current_version": "0.20.4",
+                "latest_version": "0.20.5",
+                "release_summary": {"version": "v2026.8.19", "risk_level": "high"},
+            },
+        )
+
+        self.assertIn(
+            {
+                "field": "latest_version_published_at",
+                "reason_code": "matched_release_date_unparsed",
+                "reason": "A release record matches latest version 2.19.1, but it provides no machine-readable publication date.",
+            },
+            matched_without_date,
+        )
+        self.assertIn(
+            {
+                "field": "latest_version_published_at",
+                "reason_code": "latest_version_namespace_mismatch",
+                "reason": "Latest version 0.20.5 does not exactly match the release record version v2026.8.19.",
+            },
+            mismatch,
+        )
+
+    def test_update_label_changelog_exposes_an_exact_publication_date(self) -> None:
+        config = {"type": "html-update-label", "url": "https://example.test/changelog"}
+        page = '''<Update label="v3000.5.20" description="August 21, 2026">
+        ### Added\n* A safe change\n</Update>'''
+
+        with patch("agent_cli_audit.http_get_text", return_value=page):
+            summary = get_custom_release_summary(config, "3000.5.20")
+
+        self.assertEqual(summary["version"], "3000.5.20")
+        self.assertEqual(summary["published_at"], "2026-08-21T00:00:00Z")
+
+    def test_release_name_can_match_product_version_when_tag_uses_a_build_namespace(self) -> None:
+        summary = {"version": "v2026.8.19", "name": "Hermes Agent v0.20.5 (v2026.8.19)"}
+
+        self.assertTrue(release_matches_version(summary, "0.20.5"))
 
     def test_recognizes_nvm_and_builds_a_path_bound_npm_command(self) -> None:
         node = "/Users/example/.nvm/versions/node/v22.14.0/bin/node"

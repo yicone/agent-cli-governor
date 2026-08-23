@@ -10,6 +10,7 @@ The format is intentionally simple and human-maintained.
 
 - GUI audit rows now show product logos and exact upstream publication dates for current and latest versions when GitHub or npm evidence is available; unavailable evidence is shown as `Unknown`
 - GUI evidence degradation is now explicit: a compact banner counts tools affected by failed upstream lookups, and `Unknown` latest/date/risk cells explain whether the lookup failed or no exact upstream record matched
+- `Evidence Gaps` now separates successful-but-incomplete upstream evidence from `Audit Warnings`, with field-level source, version-mapping, and date-parsing reasons; Devin stable changelog dates and Hermes release-name version aliases are now resolved, and the obsolete Grok GitHub Releases endpoint no longer emits a 404 warning
 - GUI documentation and screenshots now reflect product logos, publication-date evidence, and the Force refresh audit workflow
 - `agent-operations` is a separate catalog class for agent orchestration, routing, workspace, and observability products; Multica, Claude Code Router, Orca, and CodexBar are tracked in this class
 - Google Jules CLI, Agent Browser, and OpenSpec are now tracked from their installed npm distributions

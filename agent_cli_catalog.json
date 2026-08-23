@@ -68,7 +68,7 @@
       "version_args": [["--version"], ["version"]],
       "npm_package": "@xai-official/grok",
       "official_install_url": "https://x.ai/news/grok-build-cli",
-      "official_release_notes_url": "https://github.com/xai-org/grok-build/releases",
+      "official_release_notes_url": "https://x.ai/cli",
       "recommended_channels": ["script"],
       "supported_channels": ["script", "npm"],
       "channel_notes": {
@@ -304,7 +304,7 @@
       "official_install_url": "https://docs.devin.ai/cli",
       "official_release_notes_url": "https://docs.devin.ai/cli/changelog/stable",
       "custom_release_notes": {
-        "type": "html-version-match",
+        "type": "html-update-label",
         "url": "https://docs.devin.ai/cli/changelog/stable",
         "fallback_latest": true
       },

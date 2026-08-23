@@ -103,6 +103,10 @@ def row_dict(row: Any) -> dict[str, Any]:
     return row if isinstance(row, dict) else {}
 
 
+def safe_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else []
+
+
 def error_entries(rows: Any) -> list[dict[str, str]]:
     entries: list[dict[str, str]] = []
     if not isinstance(rows, list):
@@ -113,6 +117,48 @@ def error_entries(rows: Any) -> list[dict[str, str]]:
         else:
             entries.append({"id": "unknown", "error": str(row)})
     return entries
+
+
+def warning_messages_by_tool(errors: list[dict[str, str]]) -> dict[str, list[str]]:
+    """Group item-level audit warnings so table evidence can explain Unknown values."""
+    messages: dict[str, list[str]] = {}
+    for error in errors:
+        tool_id = error.get("id")
+        message = error.get("error")
+        if tool_id and message:
+            messages.setdefault(tool_id, []).append(message)
+    return messages
+
+
+def evidence_gaps_by_field(row: dict[str, Any]) -> dict[str, str]:
+    gaps: dict[str, str] = {}
+    for gap in safe_list(row.get("evidence_gaps")):
+        if not isinstance(gap, dict):
+            continue
+        field = gap.get("field")
+        reason = gap.get("reason")
+        if isinstance(field, str) and isinstance(reason, str):
+            gaps[field] = reason
+    return gaps
+
+
+def evidence_reason(
+    value: str,
+    warning_messages: list[str],
+    field: str,
+    gap_reasons: dict[str, str],
+    *,
+    offline: bool = False,
+) -> str:
+    if offline:
+        return f"Offline audit skipped the upstream {field} lookup."
+    if warning_messages:
+        return f"Upstream evidence lookup failed or timed out: {warning_messages[0]}"
+    if field in gap_reasons:
+        return gap_reasons[field]
+    if value in {"", "Unknown", "unknown"}:
+        return f"No resolved upstream evidence is available for this {field}."
+    return f"Exact upstream {field} evidence is available."
 
 
 def version_key(version: str | None) -> tuple[int, int, int, int] | None:
@@ -167,6 +213,13 @@ def risk_of(row: dict[str, Any]) -> str:
 def release_summary_of(row: dict[str, Any]) -> dict[str, Any]:
     summary = row_dict(row).get("release_summary")
     return summary if isinstance(summary, dict) else {}
+
+
+def publication_date_of(row: dict[str, Any], key: str) -> str:
+    value = row.get(key)
+    if not isinstance(value, str) or not value:
+        return "Unknown"
+    return value[:10]
 
 
 def focus_upgrade_model() -> None:
@@ -401,7 +454,9 @@ def render_details(container: ui.column, row: dict[str, Any] | None) -> None:
         ui.label(item.get("id", "unknown")).classes("text-xl font-semibold")
         ui.label(f"class: {item.get('tooling_class', 'agent-cli')}")
         ui.label(f"current: {item.get('current_version', 'unknown')}")
+        ui.label(f"current release date: {publication_date_of(item, 'current_version_published_at')}")
         ui.label(f"latest: {item.get('latest_version', 'unknown')}")
+        ui.label(f"latest release date: {publication_date_of(item, 'latest_version_published_at')}")
         ui.html(version_badge_html(version_state_of(item)))
         ui.label(f"install channel: {item.get('normalized_channel', 'unknown')}")
         ui.label(f"binary container: {item.get('binary_container', 'unknown')}")
@@ -452,33 +507,148 @@ def render_audit_warnings(container: ui.column, errors: list[dict[str, str]]) ->
                     ).classes("w-full")
 
 
-def render_table(container: ui.column, rows: list[dict[str, Any]], details: ui.column) -> None:
+def render_evidence_gaps(container: ui.column, rows: list[dict[str, Any]]) -> None:
+    grouped: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
+    for row in rows:
+        item = row_dict(row)
+        gaps = [gap for gap in safe_list(item.get("evidence_gaps")) if isinstance(gap, dict)]
+        if gaps:
+            grouped.append((item, gaps))
+    with container:
+        with ui.card().classes("w-full p-4 mt-3"):
+            ui.label("Evidence Gaps").classes("text-lg font-semibold")
+            if not grouped:
+                ui.label("No unresolved upstream evidence gaps for the current result.").classes("text-sm text-gray-600")
+                return
+            ui.label(
+                "These are resolved audit results with incomplete source coverage or version mapping, not failed audit operations."
+            ).classes("text-sm text-gray-600")
+            field_names = {
+                "latest_version": "Latest",
+                "current_version_published_at": "Current date",
+                "latest_version_published_at": "Latest date",
+                "release_risk": "Release Risk",
+            }
+            for item, gaps in grouped:
+                with ui.card().classes("w-full p-3 mt-2"):
+                    ui.label(item.get("id", "unknown")).classes("font-semibold")
+                    for gap in gaps:
+                        field = str(gap.get("field", "unknown"))
+                        ui.label(f"{field_names.get(field, field)}: {gap.get('reason', 'unknown reason')}").classes(
+                            "text-sm text-gray-700"
+                        )
+
+
+def render_table(
+    container: ui.column,
+    rows: list[dict[str, Any]],
+    details: ui.column,
+    errors: list[dict[str, str]] | None = None,
+) -> None:
     container.clear()
     total_rows = len(rows)
     rows = filter_rows(rows)
+    warnings_by_tool = warning_messages_by_tool(errors or [])
     table_rows = []
     for row in rows:
         item = row_dict(row)
         if not item:
             continue
         version_state = version_state_of(item)
+        current_release_date = publication_date_of(item, "current_version_published_at")
+        latest_release_date = publication_date_of(item, "latest_version_published_at")
+        risk = risk_of(item)
+        warning_messages = warnings_by_tool.get(str(item.get("id", "")), [])
+        gap_reasons = evidence_gaps_by_field(item)
+        latest_version = str(item.get("latest_version") or "Unknown")
         table_rows.append(
             {
                 **item,
                 "version_state": version_state,
-                "risk": risk_of(item),
+                "risk": risk,
+                "current_release_date": current_release_date,
+                "latest_release_date": latest_release_date,
+                "current_release_date_reason": evidence_reason(current_release_date, warning_messages, "current_version_published_at", gap_reasons, offline=state.offline),
+                "latest_version_reason": evidence_reason(latest_version, warning_messages, "latest_version", gap_reasons, offline=state.offline),
+                "latest_release_date_reason": evidence_reason(latest_release_date, warning_messages, "latest_version_published_at", gap_reasons, offline=state.offline),
+                "risk_reason": evidence_reason(risk, warning_messages, "release_risk", gap_reasons, offline=state.offline),
+                "has_evidence_warning": bool(warning_messages),
+                "has_evidence_gap": bool(gap_reasons),
             }
         )
     with container:
         ui.label(f"Showing {len(table_rows)} of {total_rows} audit result(s)").classes("text-sm text-gray-600 mb-1")
+        warning_tool_ids = {str(item.get("id", "")) for item in table_rows if item["has_evidence_warning"]}
+        gap_tool_ids = {str(item.get("id", "")) for item in table_rows if item["has_evidence_gap"]}
+        if state.offline:
+            ui.label(
+                f"Offline audit: no upstream evidence queries were made."
+            ).classes("w-full rounded bg-amber-50 px-3 py-2 text-sm text-amber-900")
+        elif warning_tool_ids:
+            ui.label(
+                f"Partial online evidence: {len(warning_tool_ids)} tool(s) were affected by failed or timed-out upstream lookups. "
+                f"{len(gap_tool_ids)} tool(s) also have non-failure evidence gaps. Hover an Unknown field for its reason."
+            ).classes("w-full rounded bg-amber-50 px-3 py-2 text-sm text-amber-900")
+        elif gap_tool_ids:
+            ui.label(
+                f"Evidence gaps: {len(gap_tool_ids)} tool(s) have fields without resolved exact upstream evidence. See Evidence Gaps below."
+            ).classes("w-full rounded bg-slate-50 px-3 py-2 text-sm text-slate-700")
         table = ui.aggrid(
             {
                 "defaultColDef": {"resizable": True, "sortable": True, "filter": True},
                 "columnDefs": [
-                    {"field": "id", "headerName": "Tool"},
+                    {
+                        "field": "id",
+                        "headerName": "Tool",
+                        ":cellRenderer": """
+                        params => {
+                          const wrap = document.createElement('span');
+                          wrap.className = 'inline-flex items-center gap-2';
+                          const fallback = () => {
+                            const symbol = document.createElement('span');
+                            symbol.className = 'material-icons text-base text-slate-600';
+                            symbol.textContent = params.data.tool_icon || 'terminal';
+                            wrap.appendChild(symbol);
+                          };
+                          if (params.data.logo_url) {
+                            const logo = document.createElement('img');
+                            logo.src = params.data.logo_url;
+                            logo.alt = `${params.value || 'Tool'} logo`;
+                            logo.width = 18;
+                            logo.height = 18;
+                            logo.style.cssText = 'width:18px;height:18px;object-fit:contain;flex:none';
+                            logo.onerror = () => { logo.remove(); fallback(); };
+                            wrap.appendChild(logo);
+                          } else {
+                            fallback();
+                          }
+                          const label = document.createElement('span');
+                          label.textContent = params.value || 'unknown';
+                          wrap.appendChild(label);
+                          return wrap;
+                        }
+                        """,
+                    },
                     {"field": "tooling_class", "headerName": "Class"},
                     {"field": "current_version", "headerName": "Current"},
-                    {"field": "latest_version", "headerName": "Latest"},
+                    {
+                        "field": "current_release_date",
+                        "headerName": "Current date",
+                        ":valueFormatter": "params => params.value || 'Unknown'",
+                        ":tooltipValueGetter": "params => params.data.current_release_date_reason || params.value || 'Unknown'",
+                    },
+                    {
+                        "field": "latest_version",
+                        "headerName": "Latest",
+                        ":valueFormatter": "params => params.value || 'Unknown'",
+                        ":tooltipValueGetter": "params => params.data.latest_version_reason || params.value || 'Unknown'",
+                    },
+                    {
+                        "field": "latest_release_date",
+                        "headerName": "Latest date",
+                        ":valueFormatter": "params => params.value || 'Unknown'",
+                        ":tooltipValueGetter": "params => params.data.latest_release_date_reason || params.value || 'Unknown'",
+                    },
                     {
                         "field": "version_state",
                         "headerName": "Version",
@@ -506,6 +676,7 @@ def render_table(container: ui.column, rows: list[dict[str, Any]], details: ui.c
                     {
                         "field": "risk",
                         "headerName": "Release Risk",
+                        ":tooltipValueGetter": "params => params.data.risk_reason || params.value || 'unknown'",
                         ":cellRenderer": """
                         params => {
                           const risk = params.value || 'unknown';
@@ -588,11 +759,12 @@ async def run_audit(
         stage = "action_queue"
         refresh_status_strip(status_strip, state.audit_rows)
         stage = "table"
-        render_table(table_col, state.audit_rows, details)
+        render_table(table_col, state.audit_rows, details, state.audit_errors)
         stage = "details"
         render_details(details, None)
         stage = "warnings"
         render_audit_warnings(warnings_col, state.audit_errors)
+        render_evidence_gaps(warnings_col, state.audit_rows)
         stage = "complete"
         activity_col.push(
             f"Audit completed. Channel={state.current_channel}, class={state.current_class}, rows={len(filter_rows(state.audit_rows))}, "
@@ -752,7 +924,7 @@ async def run_release_notes(
             raise RuntimeError("Selected CLI was not returned by the release-notes audit")
         state.audit_rows = [refreshed if row.get("id") == item["id"] else row for row in state.audit_rows]
         state.selected_row = refreshed
-        render_table(table_col, state.audit_rows, details)
+        render_table(table_col, state.audit_rows, details, state.audit_errors)
         render_details(details, refreshed)
         activity_col.push(f"Release notes loaded for {item['id']}.")
         status_label.set_text(f"Release notes loaded for {item['id']}.")
@@ -878,8 +1050,9 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
                         if state.audit_rows:
                             refresh_summary(summary_row, state.audit_rows)
                             refresh_status_strip(status_strip, state.audit_rows)
-                            render_table(table_col, state.audit_rows, details_content)
+                            render_table(table_col, state.audit_rows, details_content, state.audit_errors)
                             render_audit_warnings(warnings_col, state.audit_errors)
+                            render_evidence_gaps(warnings_col, state.audit_rows)
 
                     with ui.row().classes("w-full gap-4 flex-wrap items-center"):
                         with ui.row().classes("gap-2 items-center"):
@@ -940,6 +1113,7 @@ with ui.tab_panels(tabs, value=overview_tab).classes("w-full"):
 
                     warnings_col = ui.column().classes("w-full")
                     render_audit_warnings(warnings_col, [])
+                    render_evidence_gaps(warnings_col, [])
 
                 with ui.column().classes("flex-1 gap-4"):
                     with ui.card().classes("w-full p-4"):
@@ -964,6 +1138,7 @@ if __name__ in {"__main__", "__mp_main__"}:
             title="agent-cli-governor",
             reload=reload_mode,
             port=args.port,
+            uvicorn_reload_dirs=str(ROOT),
             uvicorn_reload_includes="*.py,*.json",
         )
     except KeyboardInterrupt:
